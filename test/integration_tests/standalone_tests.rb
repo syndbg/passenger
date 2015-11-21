@@ -1,5 +1,5 @@
 source_root = File.expand_path("../..", File.dirname(__FILE__))
-$LOAD_PATH.unshift("#{source_root}/lib")
+$LOAD_PATH.unshift("#{source_root}/src/ruby_supportlib")
 require 'phusion_passenger'
 PhusionPassenger.locate_directories
 PhusionPassenger.require_passenger_lib 'constants'
@@ -103,7 +103,7 @@ describe "Passenger Standalone" do
 
   specify "'passenger --version' displays the version number" do
     output = capture_output("passenger --version")
-    output.should include("version #{PhusionPassenger::VERSION_STRING}\n")
+    output.should =~ /#{Regexp.escape PhusionPassenger::VERSION_STRING}$/
   end
 
   describe "start command" do
@@ -220,9 +220,9 @@ describe "Passenger Standalone" do
       #     end
       #     create_tarball("support-#{compat_id}.tar.gz") do
       #       FileUtils.mkdir_p("support-binaries")
-      #       FileUtils.mkdir_p("common/libpassenger_common/ApplicationPool2")
-      #       create_file("common/libboost_oxt.a")
-      #       create_file("common/libpassenger_common/ApplicationPool2/Implementation.o")
+      #       FileUtils.mkdir_p("cxx_supportlib/libpassenger_common/ApplicationPool2")
+      #       create_file("cxx_supportlib/libboost_oxt.a")
+      #       create_file("cxx_supportlib/libpassenger_common/ApplicationPool2/Implementation.o")
       #       create_dummy_support_binaries
       #     end
       #   end

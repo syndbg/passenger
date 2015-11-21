@@ -1,10 +1,16 @@
 # encoding: binary
 
 require File.expand_path(File.dirname(__FILE__) + "/library")
+require 'cgi'
 
 app = lambda do |env|
   case env['PATH_INFO']
   when '/'
+    params = CGI.parse(env['QUERY_STRING'])
+    if params['sleep_seconds'].first
+      sleep params['sleep_seconds'].first.to_f
+    end
+
     if File.exist?("front_page.txt")
       text_response(File.read("front_page.txt"))
     else
@@ -65,7 +71,7 @@ app = lambda do |env|
     text_response("ok")
   when '/print_stdout_and_stderr'
     STDOUT.puts "hello stdout!"
-    sleep 0.1  # Give HelperAgent the time to process stdout first.
+    sleep 0.1  # Give Passenger core some time to process stdout first.
     STDERR.puts "hello stderr!"
     text_response("ok")
   when '/switch_protocol'

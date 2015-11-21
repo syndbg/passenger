@@ -1,8 +1,9 @@
 #!/usr/bin/env ruby
 #  Phusion Passenger - https://www.phusionpassenger.com/
-#  Copyright (c) 2010-2015 Phusion
+#  Copyright (c) 2010-2015 Phusion Holding B.V.
 #
-#  "Phusion Passenger" is a trademark of Hongli Lai & Ninh Bui.
+#  "Passenger", "Phusion Passenger" and "Union Station" are registered
+#  trademarks of Phusion Holding B.V.
 #
 #  Permission is hereby granted, free of charge, to any person obtaining a copy
 #  of this software and associated documentation files (the "Software"), to deal
@@ -24,7 +25,7 @@
 
 ## Magic comment: begin bootstrap ##
 source_root = File.expand_path("..", File.dirname(__FILE__))
-$LOAD_PATH.unshift("#{source_root}/lib")
+$LOAD_PATH.unshift("#{source_root}/src/ruby_supportlib")
 begin
   require 'rubygems'
 rescue LoadError
@@ -36,6 +37,7 @@ PhusionPassenger.locate_directories
 PhusionPassenger.require_passenger_lib 'constants'
 PhusionPassenger.require_passenger_lib 'platform_info'
 PhusionPassenger.require_passenger_lib 'admin_tools/instance_registry'
+PhusionPassenger.require_passenger_lib 'config/utils'
 PhusionPassenger.require_passenger_lib 'utils/ansi_colors'
 require 'optparse'
 require 'socket'
@@ -45,7 +47,7 @@ include PhusionPassenger::SharedConstants
 include PhusionPassenger::AdminTools
 include PhusionPassenger::Utils::AnsiColors
 
-DEFAULT_OPTIONS = { :show => 'pool', :color => STDOUT.tty?, :header => true }.freeze
+DEFAULT_OPTIONS = { :show => 'pool', :color => STDOUT.tty? }.freeze
 
 
 ##### Show status command #####
@@ -82,13 +84,7 @@ def find_sole_instance
     puts
     puts "  passenger-status <NAME>"
     puts
-    puts "The following instances are running:"
-    puts
-    printf "%-25s  %s\n", "Name", "Description"
-    puts "------------------------------------------------------------------"
-    instances.each do |instance|
-      printf "%-25s  %s\n", instance.name, instance.server_software
-    end
+    PhusionPassenger::Config::Utils.list_all_passenger_instances(instances)
     exit 1
   end
 end
@@ -105,15 +101,25 @@ def find_instance_by_name_prefix(name)
 end
 
 def show_status(instance, options)
-  print_header(STDOUT, instance) if options[:header]
+  # if the noshow override is not specified, the default is to show the header, unless show=xml
+  if options[:noheader] != true && options[:show] != 'xml'
+    print_header(STDOUT, instance)
+  end
 
   case options[:show]
   when 'pool'
     request = Net::HTTP::Get.new("/pool.txt?colorize=#{options[:color]}&verbose=#{options[:verbose]}")
-    request.basic_auth("ro_admin", obtain_read_only_admin_password(instance))
-    response = instance.http_request("agents.s/server_admin", request)
+    try_performing_ro_admin_basic_auth(request, instance)
+    response = instance.http_request("agents.s/core_api", request)
     if response.code.to_i / 100 == 2
       puts response.body
+    elsif response.code.to_i == 401
+      if response["pool-empty"] == "true"
+        puts "#{PROGRAM_NAME} is currently not serving any applications."
+      else
+        print_permission_error_message
+        exit 2
+      end
     else
       STDERR.puts "*** An error occured."
       STDERR.puts "#{response.code}: #{response.body}"
@@ -122,10 +128,13 @@ def show_status(instance, options)
 
   when 'requests', 'server'
     request = Net::HTTP::Get.new("/server.json")
-    request.basic_auth("ro_admin", obtain_read_only_admin_password(instance))
-    response = instance.http_request("agents.s/server_admin", request)
+    try_performing_ro_admin_basic_auth(request, instance)
+    response = instance.http_request("agents.s/core_api", request)
     if response.code.to_i / 100 == 2
       puts response.body
+    elsif response.code.to_i == 401
+      print_permission_error_message
+      exit 2
     else
       STDERR.puts "*** An error occured."
       STDERR.puts "#{response.code}: #{response.body}"
@@ -134,8 +143,8 @@ def show_status(instance, options)
 
   when 'backtraces'
     request = Net::HTTP::Get.new("/backtraces.txt")
-    request.basic_auth("ro_admin", obtain_read_only_admin_password(instance))
-    response = instance.http_request("agents.s/server_admin", request)
+    try_performing_ro_admin_basic_auth(request, instance)
+    response = instance.http_request("agents.s/core_api", request)
     if response.code.to_i / 100 == 2
       text = response.body
       # Colorize output
@@ -143,6 +152,9 @@ def show_status(instance, options)
       text.gsub!(/^(Thread .*:)$/, color.black_bg + color.yellow + '\1' + color.reset)
       text.gsub!(/^( +in '.*? )(.*?)\(/, '\1' + color.bold + '\2' + color.reset + '(')
       puts text
+    elsif response.code.to_i == 401
+      print_permission_error_message
+      exit 2
     else
       STDERR.puts "*** An error occured."
       STDERR.puts "#{response.code}: #{response.body}"
@@ -151,8 +163,8 @@ def show_status(instance, options)
 
   when 'xml'
     request = Net::HTTP::Get.new("/pool.xml?secrets=#{options[:verbose]}")
-    request.basic_auth("ro_admin", obtain_read_only_admin_password(instance))
-    response = instance.http_request("agents.s/server_admin", request)
+    try_performing_ro_admin_basic_auth(request, instance)
+    response = instance.http_request("agents.s/core_api", request)
     if response.code.to_i / 100 == 2
       indented = format_with_xmllint(response.body)
       if indented
@@ -161,6 +173,13 @@ def show_status(instance, options)
         puts response.body
         STDERR.puts "*** Tip: if you install the 'xmllint' command then the XML output will be indented."
       end
+    elsif response.code.to_i == 401
+      if response["pool-empty"] == "true"
+        puts "#{PROGRAM_NAME} is currently not serving any applications."
+      else
+        print_permission_error_message
+        exit 2
+      end
     else
       STDERR.puts "*** An error occured."
       STDERR.puts "#{response.code}: #{response.body}"
@@ -168,11 +187,14 @@ def show_status(instance, options)
     end
 
   when 'union_station'
-    request = Net::HTTP::Get.new("/status.txt")
-    request.basic_auth("ro_admin", obtain_read_only_admin_password(instance))
-    response = instance.http_request("agents.s/logging_admin", request)
+    request = Net::HTTP::Get.new("/server.json")
+    try_performing_ro_admin_basic_auth(request, instance)
+    response = instance.http_request("agents.s/ust_router_api", request)
     if response.code.to_i / 100 == 2
       puts response.body
+    elsif response.code.to_i == 401
+      print_permission_error_message
+      exit 2
     else
       STDERR.puts "*** An error occured."
       STDERR.puts "#{response.code}: #{response.body}"
@@ -188,13 +210,13 @@ def print_header(io, instance)
   io.puts
 end
 
-def obtain_read_only_admin_password(instance)
+def try_performing_ro_admin_basic_auth(request, instance)
   begin
     password = instance.read_only_admin_password
   rescue Errno::EACCES
-    print_permission_error_message
-    exit 2
+    return
   end
+  request.basic_auth("ro_admin", password)
 end
 
 def print_permission_error_message
@@ -265,7 +287,7 @@ def create_option_parser(options)
     opts.on("--no-header", "Do not display an informative header#{nl}" <<
             "containing the timestamp, version number,#{nl}" <<
             "etc.") do
-      options[:header] = false
+      options[:noheader] = true
     end
     opts.on("--force-colors", "Display colors even if stdout is not a TTY") do
       options[:color] = true

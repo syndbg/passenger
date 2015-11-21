@@ -37,7 +37,7 @@ describe "Phusion Passenger for Nginx" do
     log "End of test"
     if example.exception
       puts "\t---------------- Begin logs -------------------"
-      File.open("test.log", "r") do |f|
+      File.open("test.log", "rb") do |f|
         f.seek(@test_log_pos)
         puts f.read.split("\n").map{ |line| "\t#{line}" }.join("\n")
       end
@@ -272,6 +272,7 @@ describe "Phusion Passenger for Nginx" do
         server[:root]        = "#{@stub.full_app_root}/public"
         server[:passenger_app_group_name] = "secondary"
         server[:passenger_load_shell_envvars] = "off"
+        server[:passenger_read_timeout] = '3000ms'
       end
       @nginx.add_server do |server|
         server[:server_name] = "3.passenger.test"
@@ -305,6 +306,13 @@ describe "Phusion Passenger for Nginx" do
       get('/').should =~ /nginx/i
     end
 
+    it "tries index.html when path ends in /" do
+      Dir.mkdir("#{@stub.app_root}/public/test")
+      File.write("#{@stub.app_root}/public/test/index.html", "indexsuccess")
+      data = get('/test/')
+      data.should == "indexsuccess"
+    end
+
     it "displays a friendly error page if the application fails to spawn" do
       File.write("#{@stub.app_root}/config.ru", %q{
         raise "my error"
@@ -330,12 +338,25 @@ describe "Phusion Passenger for Nginx" do
     end
 
     it "respawns the app after handling max_requests requests" do
-      @server = "http://3.passenger.test:#{@nginx.port}/"
+      @server = "http://3.passenger.test:#{@nginx.port}"
       pid = get("/pid")
       get("/pid").should == pid
       get("/pid").should == pid
       get("/pid").should_not == pid
     end
+
+    it "respects read_timeout setting" do
+      @server = "http://2.passenger.test:#{@nginx.port}"
+
+      # Start process
+      get("/pid")
+
+      response = get_response('/?sleep_seconds=1')
+      response.class.should == Net::HTTPOK
+      response = get_response('/?sleep_seconds=6')
+      response.class.should == Net::HTTPGatewayTimeOut
+    end
+
   end
 
   describe "oob work" do

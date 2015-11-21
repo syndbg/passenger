@@ -1,7 +1,8 @@
 #  Phusion Passenger - https://www.phusionpassenger.com/
-#  Copyright (c) 2013-2014 Phusion
+#  Copyright (c) 2013-2015 Phusion Holding B.V.
 #
-#  "Phusion Passenger" is a trademark of Hongli Lai & Ninh Bui.
+#  "Passenger", "Phusion Passenger" and "Union Station" are registered
+#  trademarks of Phusion Holding B.V.
 #
 #  Permission is hereby granted, free of charge, to any person obtaining a copy
 #  of this software and associated documentation files (the "Software"), to deal
@@ -23,7 +24,7 @@
 
 SOURCE_ROOT = File.expand_path("../..", File.dirname(__FILE__))
 Dir.chdir(SOURCE_ROOT)
-$LOAD_PATH.unshift("#{SOURCE_ROOT}/lib")
+$LOAD_PATH.unshift("#{SOURCE_ROOT}/src/ruby_supportlib")
 require 'phusion_passenger'
 PhusionPassenger.locate_directories
 PhusionPassenger.require_passenger_lib 'packaging'
@@ -48,12 +49,15 @@ end
 
 shared_examples_for "a proper package" do
   it "includes all files in the git repository" do
-    git_files = `git ls-files`.split("\n")
-    git_files.reject! { |filename| filename =~ /^Passenger.xcodeproj\// }
-    git_files.delete(".gitmodules")
-    git_files.delete("packaging/rpm")
-    git_files.delete("ext/libeio/eio.3")
-    git_files.delete("ext/libeio/eio.pod")
+    expected_files = `git ls-files`.split("\n")
+    `git submodule status`.split("\n").each do |line|
+      submodule_dir = line.strip.split(' ')[1]
+      submodule_files = `cd #{submodule_dir} && git ls-files`.split("\n")
+      submodule_files.map! { |path| "#{submodule_dir}/#{path}" }
+      expected_files.delete(submodule_dir)
+      expected_files.concat(submodule_files)
+    end
+    expected_files -= Dir.glob(PhusionPassenger::Packaging::EXCLUDE_GLOB, File::FNM_DOTMATCH)
 
     package_files = {}
     Dir.chdir(@pkg_contents_dir) do
@@ -66,7 +70,7 @@ shared_examples_for "a proper package" do
     end
 
     error = false
-    git_files.each do |filename|
+    expected_files.each do |filename|
       if !package_files[filename]
         error = true
         puts "File \"#{filename}\" is not in the package"

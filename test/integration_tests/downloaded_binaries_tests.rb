@@ -1,8 +1,9 @@
 # encoding: utf-8
 #  Phusion Passenger - https://www.phusionpassenger.com/
-#  Copyright (c) 2013-2014 Phusion
+#  Copyright (c) 2013-2015 Phusion Holding B.V.
 #
-#  "Phusion Passenger" is a trademark of Hongli Lai & Ninh Bui.
+#  "Passenger", "Phusion Passenger" and "Union Station" are registered
+#  trademarks of Phusion Holding B.V.
 #
 #  Permission is hereby granted, free of charge, to any person obtaining a copy
 #  of this software and associated documentation files (the "Software"), to deal
@@ -26,7 +27,7 @@
 # passenger_autobuilder populates the download_cache directory and runs this test script.
 
 source_root = File.expand_path("../..", File.dirname(__FILE__))
-$LOAD_PATH.unshift("#{source_root}/lib")
+$LOAD_PATH.unshift("#{source_root}/src/ruby_supportlib")
 require 'phusion_passenger'
 PhusionPassenger.locate_directories
 PhusionPassenger.require_passenger_lib 'constants'
@@ -152,7 +153,7 @@ describe "Downloaded Phusion Passenger binaries" do
       FileUtils.cp_r("download_cache.old", "server_root/#{VERSION_STRING}")
       sh "cd #{PhusionPassenger.build_system_dir} && " +
         "env BINARIES_URL_ROOT=#{url_root} " +
-        "ruby helper-scripts/download_binaries/extconf.rb --abort-on-error"
+        "ruby src/helper-scripts/download_binaries/extconf.rb --abort-on-error"
       Dir["download_cache/*"].should_not be_empty
     ensure
       File.unlink("Makefile") rescue nil
@@ -170,7 +171,7 @@ describe "Downloaded Phusion Passenger binaries" do
     begin
       result = system "cd #{PhusionPassenger.build_system_dir} && " +
         "env BINARIES_URL_ROOT=#{url_root} " +
-        "ruby helper-scripts/download_binaries/extconf.rb --abort-on-error"
+        "ruby src/helper-scripts/download_binaries/extconf.rb --abort-on-error"
       result.should be_false
     ensure
       File.unlink("Makefile") rescue nil

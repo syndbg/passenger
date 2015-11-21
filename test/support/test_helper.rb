@@ -128,52 +128,6 @@ module TestHelper
     end
   end
 
-  def describe_rails_versions(matcher, &block)
-    if ENV['ONLY_RAILS_VERSION'] && !ENV['ONLY_RAILS_VERSION'].empty?
-      found_versions = [ENV['ONLY_RAILS_VERSION']]
-    else
-      found_versions = Dir.entries("stub/rails_apps").grep(/^\d+\.\d+$/)
-      if RUBY_VERSION >= '1.9.0'
-        # Only Rails >= 2.3 is compatible with Ruby 1.9.
-        found_versions.reject! do |version|
-          version < '2.3'
-        end
-      elsif RUBY_VERSION <= '1.8.6'
-        # Rails >= 3 dropped support for 1.8.6 and older.
-        found_versions.reject! do |version|
-          version >= '3.0'
-        end
-      end
-    end
-
-    case matcher
-    when /^<= (.+)$/
-      max_version = $1
-      found_versions.reject! do |version|
-        version > max_version
-      end
-    when /^>= (.+)$/
-      min_version = $1
-      found_versions.reject! do |version|
-        version < min_version
-      end
-    when /^= (.+)$/
-      exact_version = $1
-      found_versions.reject! do |version|
-        version != exact_version
-      end
-    else
-      raise ArgumentError, "Unknown matcher string '#{matcher}'"
-    end
-
-    found_versions.sort.each do |version|
-      klass = describe("Rails #{version}", &block)
-      klass.send(:define_method, :rails_version) do
-        version
-      end
-    end
-  end
-
 
   ######## HTTP helpers ########
   # Before using these methods, one must set the '@server' instance variable
@@ -361,15 +315,16 @@ module TestHelper
     end
   end
 
-  def spawn_logging_agent(tmpdir, dump_file, password)
-    socket_filename = "#{tmpdir}/logging.socket"
+  def spawn_ust_router(tmpdir, password)
+    socket_filename = "#{tmpdir}/ust_router.socket"
     password_filename = "#{tmpdir}/password"
     File.write(password_filename, password)
     pid = spawn_process("#{PhusionPassenger.support_binaries_dir}/#{PhusionPassenger::AGENT_EXE}",
-      "logger",
+      "ust-router",
       "--passenger-root", PhusionPassenger.install_spec,
       "--log-level", PhusionPassenger::DebugLogging.log_level,
-      "--dump-file", dump_file,
+      "--dev-mode",
+      "--dump-dir", tmpdir,
       "--user",  CONFIG['normal_user_1'],
       "--group", CONFIG['normal_group_1'],
       "--listen", "unix:#{socket_filename}",
@@ -386,7 +341,7 @@ module TestHelper
     raise e
   end
 
-  def flush_logging_agent(password, socket_address)
+  def flush_ust_router(password, socket_address)
     PhusionPassenger.require_passenger_lib 'message_client' if !defined?(PhusionPassenger::MessageClient)
     client = PhusionPassenger::MessageClient.new("logging", password, socket_address)
     begin

@@ -43,7 +43,7 @@ describe "Apache 2 module" do
     log "End of test"
     if example.exception
       puts "\t---------------- Begin logs -------------------"
-      File.open("test.log", "r") do |f|
+      File.open("test.log", "rb") do |f|
         f.seek(@test_log_pos)
         puts f.read.split("\n").map{ |line| "\t#{line}" }.join("\n")
       end
@@ -504,7 +504,7 @@ describe "Apache 2 module" do
     end
   end
 
-  describe "HelperAgent" do
+  describe "core" do
     AdminTools = PhusionPassenger::AdminTools
 
     before :all do
@@ -528,19 +528,19 @@ describe "Apache 2 module" do
 
     it "is restarted if it crashes" do
       # Make sure that all Apache worker processes have connected to
-      # the helper agent.
+      # the Passenger core.
       10.times do
         get('/').should == "front page"
         sleep 0.1
       end
 
-      # Now kill the helper agent.
+      # Now kill the Passenger core.
       instance = AdminTools::InstanceRegistry.new.list.first
-      Process.kill('SIGKILL', instance.server_pid)
+      Process.kill('SIGKILL', instance.core_pid)
       sleep 0.02 # Give the signal a small amount of time to take effect.
 
       # Each worker process should detect that the old
-      # helper agent has died, and should reconnect.
+      # Passenger core has died, and should reconnect.
       10.times do
         get('/').should == "front page"
         sleep 0.1
@@ -557,7 +557,7 @@ describe "Apache 2 module" do
 
       request = Net::HTTP::Get.new("/pool.xml")
       request.basic_auth("ro_admin", instance.read_only_admin_password)
-      response = instance.http_request("agents.s/server_admin", request)
+      response = instance.http_request("agents.s/core_api", request)
       if response.code.to_i / 100 == 2
         doc = REXML::Document.new(response.body)
       else
@@ -567,7 +567,7 @@ describe "Apache 2 module" do
       groups = doc.get_elements("info/supergroups/supergroup/group")
       groups.should have(1).item
       groups.each do |group|
-        group.elements["name"].text.should == "#{@stub.full_app_root} (production)#default"
+        group.elements["name"].text.should == "#{@stub.full_app_root} (production)"
         processes = group.get_elements("processes/process")
         processes.should have(1).item
         processes[0].elements["processed"].text.should == "1"

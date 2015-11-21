@@ -18,14 +18,20 @@ namespace tut {
 			psg_destroy_pool(pool);
 		}
 
-		Header *createHeader(const HashedStaticString &key, const StaticString &val) {
+		Header *createHeader(const HashedStaticString &downcasedKey, const StaticString &val) {
 			Header *header = (Header *) psg_palloc(pool, sizeof(Header));
 			psg_lstr_init(&header->key);
+			psg_lstr_init(&header->origKey);
 			psg_lstr_init(&header->val);
-			psg_lstr_append(&header->key, pool, key.data(), key.size());
+			psg_lstr_append(&header->key, pool, downcasedKey.data(), downcasedKey.size());
+			psg_lstr_append(&header->origKey, pool, downcasedKey.data(), downcasedKey.size());
 			psg_lstr_append(&header->val, pool, val.data(), val.size());
-			header->hash = key.hash();
+			header->hash = downcasedKey.hash();
 			return header;
+		}
+
+		void insertHeader(Header *header, psg_pool_t *pool) {
+			table.insert(&header, pool);
 		}
 	};
 
@@ -54,14 +60,14 @@ namespace tut {
 		Header *header = createHeader("Content-Length", "5");
 		Header *header2 = createHeader("Host", "foo.com");
 
-		table.insert(header, pool);
+		insertHeader(header, pool);
 		ensure_equals(table.size(), 1u);
 		ensure_equals<void *>("(1)", table.lookup("hello"), NULL);
 		ensure_equals<void *>("(2)", table.lookup("Host"), NULL);
 		ensure("(3)", table.lookup("Content-Length") != NULL);
 		ensure("(4)", psg_lstr_cmp(table.lookup("Content-Length"), "5"));
 
-		table.insert(header2, pool);
+		insertHeader(header2, pool);
 		ensure_equals(table.size(), 2u);
 		ensure_equals<void *>("(5)", table.lookup("hello"), NULL);
 		ensure("(6)", table.lookup("Host") != NULL);
@@ -73,16 +79,16 @@ namespace tut {
 	TEST_METHOD(5) {
 		set_test_name("Large amounts of insertions");
 
-		table.insert(createHeader("Host", "foo.com"), pool);
-		table.insert(createHeader("Content-Length", "5"), pool);
-		table.insert(createHeader("Accept", "text/html"), pool);
-		table.insert(createHeader("Accept-Encoding", "gzip"), pool);
-		table.insert(createHeader("Accept-Language", "nl"), pool);
-		table.insert(createHeader("User-Agent", "Mozilla"), pool);
-		table.insert(createHeader("Set-Cookie", "foo=bar"), pool);
-		table.insert(createHeader("Connection", "keep-alive"), pool);
-		table.insert(createHeader("Cache-Control", "no-cache"), pool);
-		table.insert(createHeader("Pragma", "no-cache"), pool);
+		insertHeader(createHeader("Host", "foo.com"), pool);
+		insertHeader(createHeader("Content-Length", "5"), pool);
+		insertHeader(createHeader("Accept", "text/html"), pool);
+		insertHeader(createHeader("Accept-Encoding", "gzip"), pool);
+		insertHeader(createHeader("Accept-Language", "nl"), pool);
+		insertHeader(createHeader("User-Agent", "Mozilla"), pool);
+		insertHeader(createHeader("Set-Cookie", "foo=bar"), pool);
+		insertHeader(createHeader("Connection", "keep-alive"), pool);
+		insertHeader(createHeader("Cache-Control", "no-cache"), pool);
+		insertHeader(createHeader("Pragma", "no-cache"), pool);
 
 		ensure_equals<void *>(table.lookup("MyHeader"), NULL);
 		ensure(psg_lstr_cmp(table.lookup("Host"), "foo.com"));
@@ -101,8 +107,8 @@ namespace tut {
 		set_test_name("Iterators work");
 		Header *header = createHeader("Content-Length", "5");
 		Header *header2 = createHeader("Host", "foo.com");
-		table.insert(header, pool);
-		table.insert(header2, pool);
+		insertHeader(header, pool);
+		insertHeader(header2, pool);
 
 		HeaderTable::Iterator it(table);
 		ensure(*it != NULL);
@@ -125,12 +131,12 @@ namespace tut {
 		ensure_equals(table.size(), 0u);
 		ensure_equals(table.arraySize(), 4u);
 
-		table.insert(createHeader("Host", "foo.com"), pool);
-		table.insert(createHeader("Content-Length", "5"), pool);
+		insertHeader(createHeader("Host", "foo.com"), pool);
+		insertHeader(createHeader("Content-Length", "5"), pool);
 		ensure_equals(table.size(), 2u);
 		ensure_equals(table.arraySize(), 4u);
 
-		table.insert(createHeader("Accept", "text/html"), pool);
+		insertHeader(createHeader("Accept", "text/html"), pool);
 		ensure_equals(table.size(), 3u);
 		ensure_equals(table.arraySize(), 8u);
 
@@ -143,9 +149,9 @@ namespace tut {
 	TEST_METHOD(8) {
 		set_test_name("Clearing");
 
-		table.insert(createHeader("Host", "foo.com"), pool);
-		table.insert(createHeader("Content-Length", "5"), pool);
-		table.insert(createHeader("Accept", "text/html"), pool);
+		insertHeader(createHeader("Host", "foo.com"), pool);
+		insertHeader(createHeader("Content-Length", "5"), pool);
+		insertHeader(createHeader("Accept", "text/html"), pool);
 
 		table.clear();
 		ensure_equals(table.size(), 0u);
@@ -159,19 +165,30 @@ namespace tut {
 	TEST_METHOD(9) {
 		set_test_name("Duplicate header merging");
 
-		table.insert(createHeader("X-Forwarded-For", "foo.com"), pool);
-		table.insert(createHeader("X-Forwarded-For", "bar.com"), pool);
-		table.insert(createHeader("Cache-Control", "must-invalidate"), pool);
-		table.insert(createHeader("Cache-Control", "private"), pool);
-		table.insert(createHeader("cookie", "a"), pool);
-		table.insert(createHeader("cookie", "b"), pool);
-		table.insert(createHeader("set-cookie", "c=123"), pool);
-		table.insert(createHeader("set-cookie", "d=456"), pool);
+		insertHeader(createHeader("X-Forwarded-For", "foo.com"), pool);
+		insertHeader(createHeader("X-Forwarded-For", "bar.com"), pool);
+		insertHeader(createHeader("Cache-Control", "must-invalidate"), pool);
+		insertHeader(createHeader("Cache-Control", "private"), pool);
+		insertHeader(createHeader("cookie", "a"), pool);
+		insertHeader(createHeader("cookie", "b"), pool);
+		insertHeader(createHeader("set-cookie", "c=123"), pool);
+		insertHeader(createHeader("set-cookie", "d=456"), pool);
 
 		ensure_equals(table.size(), 4u);
 		ensure("(1)", psg_lstr_cmp(table.lookup("X-Forwarded-For"), "foo.com,bar.com"));
 		ensure("(2)", psg_lstr_cmp(table.lookup("Cache-Control"), "must-invalidate,private"));
 		ensure("(3)", psg_lstr_cmp(table.lookup("cookie"), "a;b"));
 		ensure("(4)", psg_lstr_cmp(table.lookup("set-cookie"), "c=123\nd=456"));
+	}
+
+	TEST_METHOD(10) {
+		set_test_name("insert() inserts a downcased version of the header for lookup while preserving the original");
+		table.insert(pool, "Content-Length", "5");
+
+		Header *header = table.lookupHeader("content-length");
+		ensure("(1)", header != NULL);
+		ensure_equals("(2)", StaticString(header->origKey.start->data, header->origKey.size), "Content-Length");
+
+		ensure_equals<void *>("(3)", table.lookup("Content-Length"), NULL);
 	}
 }

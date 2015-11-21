@@ -11,13 +11,15 @@
 #include <cstring>
 #include <unistd.h>
 
-#include <agents/Base.h>
+#include <Shared/Base.h>
 #include <Utils.h>
 #include <Utils/IOUtils.h>
 #include <Utils/StrIntUtils.h>
-#include <Utils/json.h>
+#include <jsoncpp/json.h>
 
 using namespace std;
+using namespace Passenger;
+using namespace TestSupport;
 
 namespace tut {
 	test_runner_singleton runner;
@@ -138,7 +140,7 @@ installAbortHandler() {
 
 	options.set("passenger_root", resourceLocator->getRoot());
 
-	initializeAgentOptions(options);
+	initializeAgentOptions("CxxTestMain", options);
 	installAgentAbortHandler();
 }
 

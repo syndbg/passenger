@@ -24,7 +24,7 @@
 #include <Exceptions.h>
 #include <Utils.h>
 #include <Utils/SystemTime.h>
-#include <Utils/json-forwards.h>
+#include <jsoncpp/json-forwards.h>
 
 extern "C" {
 	struct ev_loop;
@@ -104,9 +104,6 @@ extern Json::Value testConfig;
  * Create an instance directory with default parameters, suitable for unit testing.
  */
 void createInstanceDir(InstanceDirectoryPtr &instanceDir);
-
-void initializeLibeio();
-void shutdownLibeio();
 
 /**
  * Writes zeroes into the given file descriptor its buffer is full (i.e.
@@ -188,6 +185,10 @@ public:
 		} else {
 			removeDirTree(name);
 		}
+	}
+
+	string getPath() const {
+		return name;
 	}
 };
 
@@ -328,6 +329,8 @@ public:
 
 } // namespace TestSupport
 
-using namespace TestSupport;
+namespace tut {
+	using namespace TestSupport;
+}
 
 #endif /* _TEST_SUPPORT_H_ */

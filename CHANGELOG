@@ -1,7 +1,279 @@
+Release 5.0.22
+--------------
+
+ * [Apache] Fixes compatibility with Apache 2.4.17's mod_autoindex. Fix contributed by Eric Covener. Closes GH-1642.
+ * [Standalone] Passenger Standalone now [accepts configuration options from environment variables](https://www.phusionpassenger.com/library/config/standalone/intro.html). This makes using Passenger Standalone significantly easier on Heroku or on systems that follow the 12-factor principle. Closes GH-1661.
+ * [Standalone] The Nginx configuration template has been cleaned up. It is now significantly easier to edit the Nginx configuration template without breaking compatibility with future versions.
+ * [Standalone] The `passenger status` and `passenger stop` commands now respect Passengerfile.json. Closes GH-1593.
+ * [Standalone] `passenger start` now accepts the `--envvar` command line option for passing environment variables to the application.
+ * [Standalone] `passenger start` now accepts the `--memory-limit` configuration option.
+ * [Standalone] `passenger start` now accepts the `--max-request-queue-size` configuration option.
+ * Fixes Passenger erroneously adding a `Content-Length` or `Transfer-Encoding` header to Ruby HTTP 204 No Content responses. Closes GH-1595.
+ * Fixes Union Station logging of Rack response body actions.
+ * The `passenger-config restart-app` command, when given `--ignore-app-not-running`, now properly exits with a zero status when one or more applications are running, but none of them belonging to the invoking user. Closes GH-1655.
+ * The `passenger-config validate-install` command no longer prints false warnings about duplicate Passenger installs on systems that use RBenv. Closes GH-1627.
+ * Fixes race conditions in the automatic building of the Ruby native support extension. Closes GH-1570.
+ * [Enterprise] Fixes compatibility with byebug 7.0. Closes GH-1662.
+
+
+Release 5.0.21
+--------------
+
+ * Properly handles Ruby applications that output the `Content-Length` and `Transfer-Encoding` headers in non-standard casing, e.g. `Content-length`. Closes GH-1517.
+ * Fixes Ruby application loading incompatibilities caused by the use of absolute paths. Closes GH-1596.
+ * Fixes OpenSSL detection problems on OS X 10.11 El Capitan. OS X 10.11 no longer includes OpenSSL headers, so Passenger will suggest and use OpenSSL from Homebrew. Closes GH-1630.
+ * Introduces the [secure HTTP headers](https://www.phusionpassenger.com/library/indepth/meteor/secure_http_headers.html) feature for Node.js and Meteor apps. This mechanism allows Passenger to send per-request information to the application, while guaranteeing that this information is not spoofed by the client.
+ * Per-request Apache environment variables are now passed to Node.js and Meteor apps through the [`!~Passenger-Envvars`](https://www.phusionpassenger.com/library/indepth/nodejs/apache_per_request_envvars.html) secure header.
+ * Fixes some unintentional caching of request-specific environment variables. Closes GH-1479.
+ * For Node.js applications, Passenger now calls `process.emit('message', 'shutdown')` whenever Passenger shuts down an application process. This is the same hook as used by PM2, allowing applications which use the PM2 graceful shutdown mechanism to be run on Passenger without changes.
+ * [Enterprise] Fixes a bug in passenger-irb where printing strings larger than 64 KB would cause it to crash.
+ * [Enterprise] Fixes the `passenger-config restart-app` command so that it performs a non-rolling-restart unless `--rolling-restart` is given as command line option, as per the documentation. Previously, `passenger-config restart-app` without `--rolling-restart` would perform a rolling restart if rolling restarts are configured in the configuration file, but this contradicted documented behavior. Closes GH-1634.
+
+
+Release 5.0.20
+--------------
+
+ * Fixes memory management bugs in Union Station support.
+ * Improves the error handling in Union Station support.
+ * `passenger-config validate-install` now properly handles CR characters in Apache configuration files.
+
+
+Release 5.0.19
+--------------
+
+ * Fixes an encoding crash in `passenger-memory-stats` on OS X in case one or more processes are running on the system with names containing UTF-8 characters. Closes GH-1603.
+ * [Ruby] Fixes handling of HTTP 205 responses, which would cause client connections to freeze.
+ * Improves Union Station data collection: more Rack I/O events are now logged. The time taken to write out and to close the Rack response body are now logged.
+ * Improves Union Station data sending: errors are now logged more clearly, and DNS errors are now handled more robustly.
+ * Improves Union Station troubleshooting: errors can now be diagnosed by running `passenger-status --show=union_station`.
+ * Refactors the Union Station Ruby hook code. They have been extracted to external gems. However, they are still bundled with Passenger for ease of use.
+
+
+Release 5.0.18
+--------------
+
+ * Fixes more memory corruption issues in the palloc subsystem.
+ * Fixes memory corruption issues in the Passenger core that may occur if the application sets many response headers. The issue was caused by an off-by-one bug.
+
+
+Release 5.0.17
+--------------
+
+ * Adds packages for Ubuntu 15.10 "Wily", even though Ubuntu 15.10 hasn't been released yet.
+ * Fixes some memory corruption issues in the palloc subsystem. Closes GH-1587.
+ * Fixes the Node.js `PhusionPassenger.on('exit')` event. This event worked if you restart the app or detach an application process, but not if you stop Passenger.
+ * Fixes support for `passenger_pre_start` URLs that contain very long authentication strings. This was caused by the fact that our Base64 encoder generated unexpected newlines.
+ * [Standalone] Improves application prestarting. Application prestarting is now available in combination with the 'builtin' engine, and now works when SSL is used.
+
+
+Release 5.0.16
+--------------
+
+ * Allows independent configuration of Union Station gateway address, port and certificate. Closes GH-1543.
+ * Supports seek() such that body.rewind works when using Rack middleware that uses Zlib::GzipReader (e.g. for compressed requests). Closes GH-1553.
+ * [Apache] Improves detection of Apache configuration file problems. Closes GH-1577.
+ * [Enterprise] Fixes installation of the Passenger Enterprise Apache module on Debian Testing.
+ * Fixes logging of HTTP response code for Union Station. This regression was introduced by Passenger 5. Closes GH-1581. 
+ * Adds a new subcommand `passenger-config about support-binaries-dir`.
+ * Fixes a regression in the Node.js loader with regard to custom startup files. This bug was introduced in 5.0.14. Closes GH-1557 (again).
+ * Fixes a crash when a Ruby application is accessed through a sub-URI and a root virtual host at the same time.
+
+
+Release 5.0.15
+--------------
+
+ * Support SHA256 digests for the Rails asset pipeline, as used by Sprockets 3.x.
+ * Support for JRuby 9.0.0.0. Closes GH-1562.
+ * Fixes some bugs in Union Station support, which causes some data (such as controller information and exceptions) to not be logged.
+ * The old Users Guides have been deprecated in favor of the [Passenger Library](https://www.phusionpassenger.com/library/). The Users Guides now redirect to appropriate sections in the Passenger Library.
+
+
+Release 5.0.14
+--------------
+
+ * [Standalone] Relative path handling has been improved. In previous versions, relative paths were not handled in a consistent manner. Relative paths are now handled consistently according to the following rules:
+
+   - If a relative path is given via a command line option, then it is relative to the current working directory.
+   - If a relative path is given via Passengerfile.json, then it is relative to Passengerfile.json.
+
+   Closes GH-1557.
+ * [Standalone] The `--disable-turbocaching` now works with the Nginx engine.
+
+
+Release 5.0.13
+--------------
+
+ * The `passenger-config restart-app` command now supports the option `--ignore-passenger-not-running`. If this option is given, the command will exit normally instead of exiting with an error, if Passenger is not running. This option is useful in deployments involving Passenger Standalone. In an initial deployment, Passenger Standalone may not yet be running. Passing this option allows you to ignore that issue.
+ * SELinux policy issues in the RPMs have been fixed.
+ * [Apache] `passenger-config reopen-logs` didn't work on Apache unless you explicitly set `PassengerLogFile`. This has now been fixed.
+ * [Standalone] Due to some internal refactorings, the Passenger Standalone Nginx configuration template has changed. If you used a custom Nginx configuration template, please merge our latest changes into it.
+
+
+Release 5.0.12
+--------------
+
+ * [Enterprise] Fixed passenger-irb. It was broken in 5.0.10 because of the change that made using admin commands without sudo possible.
+
+
+Release 5.0.11
+--------------
+
+ * In 5.0.10, admin tools such as `passenger-status` and `passenger-config restart-app` display an authorization error if they are run without sudo, while at the same time Passenger isn't serving any applications. Since this is confusing, they have now been modified to display a more appropriate error message.
+ * Fixes a bug in the RPMs that prevent admin tools such as `passenger-status` and `passenger-config restart-app` from working when they are invoked without root privileges.
+ * Fixes a bug on OS X that prevent admin tools such as `passenger-status` and `passenger-config restart-app` from detecting Passenger instance directories when they are invoked without root privileges. Closes GH-1535.
+ * Fixes a bug that causes Passenger not to work if the HOME environment variable is not set.
+ * Fixes compatibility with non-Rails Ruby apps that require the actionview gem. Closes GH-1547.
+ * Fixes some non-fatal "permission denied" error that may occasionally occur if user switching is turned off. Closes GH-1541.
+ * Relative values for the `pid_file` and `log_file` options in Passengerfile.json are now supported.
+ * If Passengerfile.json contains a syntax error, Passenger Standalone now correctly prints an error message instead of crashing.
+ * Sending a SIGABRT signal to a Ruby process now properly makes it terminate.
+ * The `passenger-config restart-app` command now accepts `.` as parameter, which it will interpreter as "restart the app in the current working directory". Closes GH-1386.
+ * [Apache] Setting `PassengerLogLevel` no longer redirects Apache's own stderr to that log file. Closes GH-1373.
+ * [Standalone] Passenger Standalone's Nginx engine now includes the RealIP module. Closes GH-1389.
+ * [Standalone] The `--max-preloader-idle-time` option has been added.
+
+
+Release 5.0.10
+--------------
+
+ * It is now possible to run `passenger-status`, `passenger-config restart-app` and other admin commands without using sudo. When run without sudo, these admin commands will allow you to operate on apps and processes that are owned by the user that invoked the admin command. Closes GH-1392.
+ * Fixes a crash introduces in 5.0.9 due to not properly initializing a variable. Closes GH-1530.
+ * The `passenger-config reopen-logs` command now works by instructing the Watchdog process to reopen the log file, while instructing the other Passenger processes to re-inerhit the log file from the Watchdog instead of trying to reopen the log file on their own. This makes log file reopening more robust. Closes GH-1452.
+ * `passenger-config restart-app` no longer leaves the terminal in a state with black background. Closes GH-1526.
+ * `passenger-config admin-command` has been renamed to `passenger-config api-call` in order to avoid confusion with any potential admin interfaces that we will introduce in the future.
+ * If Union Station support is enabled, process and system metrics weren't being sent correctly to Union Station. This has been fixed.
+ * [Enterprise] Fixes the fact that the Passenger Enterprise RPM didn't correctly set SELinux permissions on its own files.
+ * [Apache] passenger-install-apache2-module no longer aborts with an error if the Apache configuration file contains errors. Closes GH-1525.
+ * [Apache] Fixes a typo that would cause passenger-install-apache2-module to crash on Red Hat and CentOS systems on which the SELinux command line tools are not installed. Closes GH-1527.
+
+
+Release 5.0.9
+-------------
+
+ * The casing of original headers as generated by the application are now preserved, instead of being downcased. This fixes compatibility issues with broken HTTP clients. Closes GH-1436.
+ * Internal refactoring: we've replaced libeio with libuv. This makes some of our code simpler. Closes GH-1428.
+ * When the passenger-status tool tries to cleanup a stale instance directory, it will no longer abort with an error when it fails to do that. It will now merely print a warning. Fixes [StackOverflow question 30354732](http://stackoverflow.com/questions/30354732/cap-aborted-capistrano-aborts-rails-deploy-while-attempting-to-chown-tmp-p/30357100#30357100).
+ * Fixes compilation problems on Solaris.
+ * The Ruby handler has been made more robust. Previously, it was possible for applications to corrupt connections by returning incorrect Rack responses. This may cause connections to get stuck. The Rack handler has been hardened to ensure that connections will never get corrupted or stuck. Closes GH-1512.
+ * The Ruby handler now closes the Rack response body even when the socket connection is hijacked by the application. The Rack specification is unclear about what to do in this case, and different Ruby app servers do different things. We have found that by closing the body object anyway, we maximize compatibility with existing Rack middlewares and apps, such as Rack::Lock. Background information about this issue can be found at https://github.com/ngauthier/tubesock/issues/10#issuecomment-72539461.
+ * Fixes a crash that could occur if some HTTP request headers are present, but have the empty value. Closes GH-1524.
+ * Fixes a permission problem that prevents the web server from communicating with Passenger when user switching is off. Closes GH-1520.
+ * Fixes a few small one-time memory leaks in the Passenger agent. This wraps up the workitems discovered in valgrind runs on earlier versions.
+ * Fixes use of uninitialized metrics. This could happen for a brief moment after spawning.
+ * [Apache] If you pass the `--apxs2-path` parameter to `passenger-install-apache2-module`, and the apxs2 path that you specified is not in PATH, then the installer would think that Apache installation is broken. This has been fixed.
+ * [Apache] A `Connection: close` header that was used for internal communication between Passenger processes was being leaked to the client, which breaks HTTP keep-alive connections. This has been fixed. Closes GH-1516.
+ * [Nginx] The preferred Nginx version is now 1.8.0. It was previously 1.6.3.
+ * [Nginx] Passenger now passes to the application the raw URI as sent by the client, as long as Nginx didn't modify the URI (e.g. as part of rewrite rules). This means that escaped slashes (%2F) in the URI now work correctly and out-of-the-box as long as there are no applicable rewrite rules.
+ * [Nginx] Fixes that crash that would occur if Nginx is configured to log to syslog. And to prevent log messages from disappearing into a black hole, Passenger will now ask you to set `passenger_log_file` if Nginx is configured to log to syslog. Closes GH-1514.
+ * [Standalone] Prevents an existing instance from being shut down if starting a new instance fails.
+
+
+Release 5.0.8
+-------------
+
+ * We now supply Debian 8 and Ubuntu 15.04 packages. Closes GH-1494 and GH-1400.
+ * We now supply Red Hat 6, Red Hat 7, CentOS 6 and CentOS 7 packages.
+ * We no longer supply Ubuntu 10.04 packages because Ubuntu 10.04 is no longer supported by Canonical.
+ * Fixes a Passenger crash (SIGSEGV) that occurs occasionally when out-of-band garbage collection is enabled. Closes GH-1469.
+ * Fixes a Passenger crash (SIGSEGV) that occurs occasionally with redirects to relative URLs. Closes GH-1513.
+ * Fixes cases when Passenger shuts down more processes than is allowed by the `min_instances` limit. Closes GH-1500.
+ * Fixes "Bad Gateway" errors that would occur when an application sets the X-Sendfile or X-Accel-Redirect header, together with a non-empty response body. Closes GH-1498.
+ * Fixes the fact that Passenger agent processes don't lower their privilege when user switching is turned off.
+ * Fixes autodetection of Apache on Gentoo. Closes GH-1510.
+ * Fixes compilation problems on Solaris. Closes GH-1508.
+ * [Standalone] Adds the `--pool-idle-time` command line parameter.
+ * [Standalone] Adds the `--auto` command line parameter for running non-interactively. This supresses prompts. Closes GH-1511.
+
+
+Release 5.0.7
+-------------
+
+ * Supports changed way of specifying settings for (non-bundled) Meteor apps. Closes GH-1403.
+ * Fixes an integer-to-string conversion bug in the code responsible for buffering chunked request bodies. This bug could cause the PassengerAgent to crash due to an exception. Thanks to Marcus Rückert of SUSE for reporting this.
+ * Request-specific environment variables are no longer cached. This fixes a number of issues, such as Shibboleth not working properly and conflicts between HTTPS and non-HTTPS virtual hosts. Closes GH-1472.
+ * Fixes a memory corruption bug that would be triggered when using `passenger_base_uri`. The memory corruption bug resided in the code for resolving symlinks. Closes GH-1388.
+ * Re-introduced signal catchers during shutdown, to allow clean shutdown in Foreman. Closes GH-1454.
+ * `passenger-status --show=xml` no longer outputs the non-XML header by default. This fixes a regression as reported in a comment in GH-1136.
+ * Passenger now prefers to load Rack and Bundler from RubyGems instead of from `vendor_ruby`. This solves some issues with Rack and Bundler on Debian systems. Closes GH-1480 and GH-1478.
+ * The turbocache no longer caches responses that contain the `X-Sendfile` or the `X-Accel-Redirect` header.
+ * The preferred Nginx version has been upgraded to 1.6.3.
+ * The logging agent no longer aborts with an error if one of the Passenger root directory's parent directories is not world-executable. Closes GH-1487.
+ * [Standalone] It is now possible to configure the Ruby, Node.js and Python executable to use in Passenger Standalone through the command line options --ruby, --nodejs and --python. Closes GH-1442.
+ * [Standalone] Running `passenger start --engine=builtin --daemonize` would fail with a timeout error. This has been fixed.
+ * [Standalone] Running `passenger start --nginx-version=XXX` would crash. This has been fixed. Closes GH-1490.
+ * [Apache] Fixed some issues with X-Sendfile. Closes GH-1376.
+ * [Apache] If the installer fails to autodetect Apache while the installer is running as a normal user, it will now ask you to give it root privileges. Closes GH-1289.
+ * [Apache] The installer now validates your Apache configuration file to check for common problems. The validator can also be accessed separately by running `passenger-config validate-install --validate-apache2`.
+ * [Nginx] Introduces the `passenger_read_timeout` option for rare cases when server needs more than the default 10 minute timeout. Contributed by pkmiec. Closes [GH-PR-34](https://github.com/phusion/passenger/pull/34).
+ * [Nginx] The Nginx module now looks for index.html if the path ends in / so that it works intuitively, without needing to use try_files.
+ * Fixes wrong memory address display in crash dumps. Thanks to thoughtpolice for pointing it out.
+ * Fixes an ugly backtrace that would be shown if an invalid request is made to an application process using the private HTTP interface. Contributed by jbergler. Closes GH-1311.
+ * Various documentation improvements. Closes [GH-PR-1332](https://github.com/phusion/passenger/pull/1332), [GH-PR-1354](https://github.com/phusion/passenger/pull/1354), [GH-PR-1216](https://github.com/phusion/passenger/pull/1216), [GH-PR-1385](https://github.com/phusion/passenger/pull/1385), [GH-PR-1302](https://github.com/phusion/passenger/pull/1302).
+
+
+Release 5.0.6
+-------------
+
+ * The turbocache no longer caches responses for which the Cache-Control header contains "no-cache". Please note that "no-cache" does not mean "do not cache this response". Instead, it means "any caching servers may only serve the cached response after validating it". Since the turbocache does not support validation, we've chosen to skip caching instead.
+
+   Coincidentally, this change "fixes" problems with applications that erroneously use "no-cache" as a flag for "do not cache this response". What these applications should actually use is "no-store". We recommend the developers of such applications to change their caching headers in this manner, because even if Passenger doesn't unintentionally cache the response, any intermediate proxies that visitors are behind may still cache the response.
+ * Fixes a number of memory leaks. Memory was leaked upon processing a request with multiple headers, upon processing a response with multiple headers, and upon processing a response with Set-Cookie headers. Every time such a request or response was processed, 512 bytes of memory was leaked due to improperly dereferencing relevant memory buffers. Closes GH-1455.
+ * Fixes various bugs related to Union Station data collection.
+
+   Union Station is our upcoming application analytics and performance monitoring SaaS platform. It is opt-in: no data is collected unless you turn the feature on.
+ * Fixes a Union Station-related file descriptor leak. Closes GH-1439.
+ * Fixes some bugs w.r.t. use of uninitialized memory.
+ * More informative error message if a support binary is not found, including a resolution hint. Closes GH-1395.
+ * [Apache] `SetEnv` variables are now passed as Rack/CGI/request variables. This was also the case in Passenger 4, but not in Passenger 5.0.0-5.0.5. We've restored the old behavior because the behavior in 5.0.0-5.0.5 breaks certain Apache modules such as Shibboleth. Closes GH-1446.
+ * [Standalone] PID and log files now correctly created if user specifies relative path.
+
+
+Release 5.0.5
+-------------
+
+ * Fixes various crashes due to use of uninitialized memory. One such crash is documented in GH-1431.
+ * Fixes a connection stall in the Apache module. Closes GH-1425.
+ * Fixes a potential read-past-buffer bug in string-to-integer conversion routines. Thanks to dcb314 for spotting this. Closes GH-1441.
+ * Fixes a compilation problem on Solaris. This problem was caused by the fact that `tm_gmtoff` is not supported on that platform. Closes GH-1435.
+ * There is now an API endpoint for force disconnecting a client: `passenger-config admin-command DELETE /server/<client name>.json`. Closes GH-1246.
+ * Fixes some file descriptor leaks. These leaks were caused by the fact that keep-alive connections with application processes were not being closed properly. Closes GH-1439.
+ * In order to more easily debug future file descriptor leaks, we've introduced the `PassengerFileDescriptorLogFile` (Apache) and `passenger_file_descriptor_log_file` (Nginx) config options. This allows Passenger to log all file descriptor open/close activity to a specific log file.
+ * The `PassengerDebugLogFile` (Apache) and `passenger_debug_log_file` (Nginx) configuration options have been renamed to `PassengerLogFile` and `passenger_log_file`, respectively. The old name is support supported for backward compatibility reasons.
+ * [Enterprise] Fixes a bug in Flying Passenger's `--instance-registry-dir` command line parameter. This command line parameter didn't do anything.
+ * [Enterprise] The Flying Passenger daemon no longer supports the `--max-preloader-idle-time` config option. This is because the config option never worked. The correct way to set the max preloader idle time is through the Nginx config option, but this was wrongly documented, so the documentation has been fixed.
+
+
+Release 5.0.4
+-------------
+
+ * Fixes a compilation problem introduced in 5.0.3.
+
+
+Release 5.0.3
+-------------
+
+ * [Standalone] When using the builtin engine, `passenger start` may crash during startup due to an initialization race condition. This has been fixed.
+ * [Enterprise] Fixes a bug in passenger-irb. Running passenger-irb without a PID parameter worked, but running it with a PID parameter didn't.
+ * Fixes an integer overflow that resulted in a file descriptor leak and stalled client connections. Closes GH-1412.
+ * Truncates Passenger source code paths in logs (to 3 chars) to reduce redundant info. Closes GH-1383.
+ * Fixes invalid JSON output for non-finite double values (e.g. from the HTTP JSON API). Closes GH-1408.
+ * All hooks now set the `PASSENGER_HOOK_NAME` environment variable. This variable is set to the name of the hook that is being called.
+ * The Ruby handler no longer tries to call #force_encoding on response body strings, which fixes an incompatibility with apps/libraries that return frozen body strings. Closes GH-1414.
+ * If the Ruby handler crashes while processing a Rack response body, it will now no longer stall the connection.
+ * Fixes env.SERVER_PORT containing 80 instead of 443 when using https on default port. Closes GH-1421.
+ * We now handle errors in the `poll()` system call better. This might fix some crashes during shutdown which manifest on FreeBSD.
+
+
 Release 5.0.2
 -------------
 
+ * Fixes a connection freeze that could occur when processing large responses. This would manifest itself under the error message "This website is under heavy load" or "Request queue is full, returning an error". Closes GH-1404.
+ * Debian and Ubuntu packages have been reintroduced.
  * When `passenger-config restart-app` is run interactively, if Passenger is not serving any applications, then the command now prints an error message instead of showing a menu with only a "Cancel" option.
+ * Fixes a compilation problem on FreeBSD 10 (contributed by: clemensg). Closes GH-1401.
+ * [Standalone] Fixes a crash that would occur if you use the `--ctl` parameter.
+ * [Enterprise] The `--max-request-time` option has been added to Passenger Standalone.
+ * [Enterprise] The `max_request_time_reached` hook has been introduced. This hook allows you to run diagnostics on a process that that took too long to respond to a request.
 
 
 Release 5.0.1
@@ -41,6 +313,7 @@ Release 5.0.0 release candidate 1
  * [Nginx] It is no longer necessary to re-specify `passenger_enabled` in `location` contexts. Closes GH-1338.
  * [Enterprise] Fixed a bug in mass deployment reloading.
  * [Enterprise] Fixed a bug in mass deployment daemonization.
+ * [Enterprise] Fixed passenger-irb. Closes GH-1350.
  * [Enterprise] The mass deployment mode now supports the `app_type` and `startup_file` configuration options in Passengerfile.json/passenger-standalone.json. Closes GH-1366.
 
 

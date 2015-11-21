@@ -1,7 +1,8 @@
 #  Phusion Passenger - https://www.phusionpassenger.com/
-#  Copyright (c) 2010-2014 Phusion
+#  Copyright (c) 2010-2015 Phusion Holding B.V.
 #
-#  "Phusion Passenger" is a trademark of Hongli Lai & Ninh Bui.
+#  "Passenger", "Phusion Passenger" and "Union Station" are registered
+#  trademarks of Phusion Holding B.V.
 #
 #  Permission is hereby granted, free of charge, to any person obtaining a copy
 #  of this software and associated documentation files (the "Software"), to deal
@@ -34,8 +35,8 @@ def recursive_copy_files(files, destination_dir, preprocess = false, variables =
       FileUtils.mkdir_p("#{destination_dir}/#{dir}")
     end
     if !File.directory?(filename)
-      if preprocess && filename =~ /\.template$/
-        real_filename = filename.sub(/\.template$/, '')
+      if preprocess && filename =~ /\.erb$/
+        real_filename = filename.sub(/\.erb$/, '')
         FileUtils.install(filename, "#{destination_dir}/#{real_filename}", :preserve => true)
         Preprocessor.new.start(filename, "#{destination_dir}/#{real_filename}",
           variables)
@@ -93,6 +94,14 @@ end
 
 def git_tag
   return "#{git_tag_prefix}-#{VERSION_STRING}"
+end
+
+def apt_repo_name
+  if is_open_source?
+    "passenger"
+  else
+    "passenger-enterprise"
+  end
 end
 
 def homebrew_dir
@@ -185,6 +194,8 @@ task 'package:release' => ['package:set_official', 'package:gem', 'package:tarba
       if !is_beta
         puts "Initiating building of Debian packages"
         Rake::Task['package:initiate_debian_building'].invoke
+        puts "Initiating building of RPM packages"
+        Rake::Task['package:initiate_rpm_building'].invoke
       end
 
       puts "Building OS X binaries..."
@@ -226,6 +237,8 @@ task 'package:release' => ['package:set_official', 'package:gem', 'package:tarba
       if !is_beta
         puts "Initiating building of Debian packages"
         Rake::Task['package:initiate_debian_building'].invoke
+        puts "Initiating building of RPM packages"
+        Rake::Task['package:initiate_rpm_building'].invoke
       end
 
       puts "Building OS X binaries..."
@@ -318,10 +331,10 @@ task 'package:sign' do
 end
 
 task 'package:update_homebrew' do
-  require 'digest/sha1'
+  require 'digest/sha2'
   version = VERSION_STRING
-  sha1 = File.open("#{PKG_DIR}/passenger-#{version}.tar.gz", "rb") do |f|
-    Digest::SHA1.hexdigest(f.read)
+  sha256 = File.open("#{PKG_DIR}/passenger-#{version}.tar.gz", "rb") do |f|
+    Digest::SHA256.hexdigest(f.read)
   end
   sh "rm -rf #{homebrew_dir}"
   sh "git clone git@github.com:phusion/homebrew.git #{homebrew_dir}"
@@ -331,8 +344,8 @@ task 'package:update_homebrew' do
   formula = File.read("/tmp/homebrew/Library/Formula/passenger.rb")
   formula.gsub!(/passenger-.+?\.tar\.gz/, "passenger-#{version}.tar.gz") ||
     abort("Unable to substitute Homebrew formula tarball filename")
-  formula.gsub!(/^  sha1 .*/, "  sha1 '#{sha1}'") ||
-    abort("Unable to substitute Homebrew formula SHA-1")
+  formula.gsub!(/^  sha256 .*/, "  sha256 \"#{sha256}\"") ||
+    abort("Unable to substitute Homebrew formula SHA-256")
   necessary_dirs = ORIG_TARBALL_FILES.call.map{ |filename| filename.split("/").first }.uniq
   necessary_dirs -= Packaging::HOMEBREW_EXCLUDE
   necessary_dirs += ["buildout"]
@@ -436,7 +449,7 @@ task 'package:initiate_debian_building' do
   end
 
   uri = URI.parse("https://oss-jenkins.phusion.nl/buildByToken/buildWithParameters?" +
-    "job=Passenger%20#{type}%20Debian%20packages%20(release)&ref=#{git_tag}")
+    "job=Passenger%20#{type}%20Debian%20packages%20(release)&ref=#{git_tag}&repo=#{apt_repo_name}")
   http = Net::HTTP.new(uri.host, uri.port)
   http.use_ssl = true
   http.verify_mode = OpenSSL::SSL::VERIFY_PEER
@@ -449,6 +462,54 @@ task 'package:initiate_debian_building' do
       response.body
   end
   puts "Initiated building of Debian packages."
+end
+
+task 'package:initiate_rpm_building' do
+  require 'yaml'
+  require 'uri'
+  require 'net/http'
+  require 'net/https'
+  version = VERSION_STRING
+  begin
+    website_config = YAML.load_file(File.expand_path("~/.passenger_website.yml"))
+  rescue Errno::ENOENT
+    STDERR.puts "-------------------"
+    abort "*** ERROR: Please put the Phusion Passenger website admin " +
+      "password in ~/.passenger_website.yml:\n" +
+      "admin_password: ..."
+  end
+  if is_open_source?
+    type = "open%20source"
+    jenkins_token = website_config["jenkins_token"]
+    if !jenkins_token
+      abort "*** ERROR: Please put the Passenger open source Jenkins " +
+        "authentication token in ~/.passenger_website.yml, under " +
+        "the 'jenkins_token' key."
+    end
+  else
+    type = "Enterprise"
+    jenkins_token = website_config["jenkins_enterprise_token"]
+    if !jenkins_token
+      abort "*** ERROR: Please put the Passenger Enterprise Jenkins " +
+        "authentication token in ~/.passenger_website.yml, under " +
+        "the 'jenkins_enterprise_token' key."
+    end
+  end
+
+  uri = URI.parse("https://oss-jenkins.phusion.nl/buildByToken/buildWithParameters?" +
+    "job=Passenger%20#{type}%20RPM%20packages%20(release)&ref=#{git_tag}&repo=#{apt_repo_name}")
+  http = Net::HTTP.new(uri.host, uri.port)
+  http.use_ssl = true
+  http.verify_mode = OpenSSL::SSL::VERIFY_PEER
+  request = Net::HTTP::Post.new(uri.request_uri)
+  request.set_form_data("token" => jenkins_token)
+  response = http.request(request)
+  if response.code != 200 && response.body != "Scheduled.\n"
+    abort "*** ERROR: Cannot initiate building of RPM packages:\n" +
+      "Status: #{response.code}\n\n" +
+      response.body
+  end
+  puts "Initiated building of RPM packages."
 end
 
 task 'package:build_osx_binaries' do
@@ -512,6 +573,8 @@ task :fakeroot => [:apache2, :nginx, :doc] do
   psg_apache2_module_path       = ENV['APACHE2_MODULE_PATH'] || "#{fs_libdir}/apache2/modules/mod_passenger.so"
   psg_ruby_extension_source_dir = "#{fs_datadir}/#{GLOBAL_NAMESPACE_DIRNAME}/ruby_extension_source"
   psg_nginx_module_source_dir   = "#{fs_datadir}/#{GLOBAL_NAMESPACE_DIRNAME}/ngx_http_passenger_module"
+  psg_ruby       = ENV['RUBY'] || "#{fs_bindir}/ruby"
+  psg_free_ruby  = ENV['FREE_RUBY'] || "/usr/bin/env ruby"
 
   fakeroot = "pkg/fakeroot"
   fake_rubylibdir = "#{fakeroot}#{psg_rubylibdir}"
@@ -543,9 +606,9 @@ task :fakeroot => [:apache2, :nginx, :doc] do
   sh "mkdir -p #{fake_nodelibdir}"
   sh "cp -R #{PhusionPassenger.node_libdir}/phusion_passenger #{fake_nodelibdir}/"
 
-  # Phusion Passenger common libraries
+  # C++ support libraries
   sh "mkdir -p #{fake_libdir}"
-  sh "cp -R #{PhusionPassenger.lib_dir}/common #{fake_libdir}/"
+  sh "cp -R #{COMMON_OUTPUT_DIR} #{fake_libdir}/"
   sh "rm -rf #{fake_libdir}/common/libboost_oxt"
 
   # Ruby extension binaries
@@ -573,18 +636,18 @@ task :fakeroot => [:apache2, :nginx, :doc] do
   sh "mkdir -p #{fake_include_dir}"
   # Infer headers that the Nginx module needs
   headers = []
-  Dir["ext/nginx/*.[ch]"].each do |filename|
-    File.read(filename).split("\n").grep(%r{#include "common/(.+)"}) do |match|
-      headers << ["ext/common/#{$1}", "common/#{$1}"]
+  Dir["src/nginx_module/*.[ch]"].each do |filename|
+    File.read(filename).split("\n").grep(%r{#include "cxx_supportlib/(.+)"}) do |match|
+      headers << ["src/cxx_supportlib/#{$1}", "cxx_supportlib/#{$1}"]
     end
   end
   # Manually add headers that could not be inferred through
   # the above code
   headers.concat([
-    ["ext/common/Exceptions.h", "common/Exceptions.h"],
-    ["ext/common/Utils/modp_b64.h", "common/Utils/modp_b64.h"],
-    ["ext/common/Utils/modp_b64_data.h", "common/Utils/modp_b64_data.h"],
-    ["ext/boost/detail/endian.hpp", "boost/detail/endian.hpp"]
+    ["src/cxx_supportlib/Exceptions.h", "cxx_supportlib/Exceptions.h"],
+    ["src/cxx_supportlib/vendor-modified/modp_b64.h", "cxx_supportlib/vendor-modified/modp_b64.h"],
+    ["src/cxx_supportlib/vendor-modified/modp_b64_data.h", "cxx_supportlib/vendor-modified/modp_b64_data.h"],
+    ["src/cxx_supportlib/vendor-modified/boost/detail/endian.hpp", "cxx_supportlib/vendor-modified/boost/detail/endian.hpp"]
   ])
   headers.each do |header|
     target = "#{fake_include_dir}/#{header[1]}"
@@ -597,7 +660,7 @@ task :fakeroot => [:apache2, :nginx, :doc] do
 
   # Nginx module sources
   sh "mkdir -p #{fake_nginx_module_source_dir}"
-  sh "cp ext/nginx/* #{fake_nginx_module_source_dir}/"
+  sh "cp src/nginx_module/* #{fake_nginx_module_source_dir}/"
 
   # Documentation
   sh "mkdir -p #{fake_docdir}"
@@ -608,23 +671,29 @@ task :fakeroot => [:apache2, :nginx, :doc] do
   sh "mkdir -p #{fake_bindir}"
   Packaging::USER_EXECUTABLES.each do |exe|
     sh "cp bin/#{exe} #{fake_bindir}/"
-    if !Packaging::EXECUTABLES_WITH_FREE_RUBY.include?(exe)
-      change_shebang("#{fake_bindir}/#{exe}", "#{fs_bindir}/ruby")
+    if Packaging::EXECUTABLES_WITH_FREE_RUBY.include?(exe)
+      shebang = psg_free_ruby
+    else
+      shebang = psg_ruby
     end
+    change_shebang("#{fake_bindir}/#{exe}", shebang)
   end
 
   # Superuser binaries
   sh "mkdir -p #{fake_sbindir}"
   Packaging::SUPER_USER_EXECUTABLES.each do |exe|
     sh "cp bin/#{exe} #{fake_sbindir}/"
-    if !Packaging::EXECUTABLES_WITH_FREE_RUBY.include?(exe)
-      change_shebang("#{fake_sbindir}/#{exe}", "#{fs_bindir}/ruby")
+    if Packaging::EXECUTABLES_WITH_FREE_RUBY.include?(exe)
+      shebang = psg_free_ruby
+    else
+      shebang = psg_ruby
     end
+    change_shebang("#{fake_sbindir}/#{exe}", shebang)
   end
 
   # Apache 2 module
   sh "mkdir -p #{File.dirname(fake_apache2_module_path)}"
-  sh "cp #{APACHE2_MODULE} #{fake_apache2_module_path}"
+  sh "cp #{APACHE2_TARGET} #{fake_apache2_module_path}"
 
   # Ruby extension sources
   sh "mkdir -p #{fake_ruby_extension_source_dir}"

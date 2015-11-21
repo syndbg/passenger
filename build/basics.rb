@@ -1,7 +1,8 @@
 #  Phusion Passenger - https://www.phusionpassenger.com/
-#  Copyright (c) 2010-2014 Phusion
+#  Copyright (c) 2010-2015 Phusion Holding B.V.
 #
-#  "Phusion Passenger" is a trademark of Hongli Lai & Ninh Bui.
+#  "Passenger", "Phusion Passenger" and "Union Station" are registered
+#  trademarks of Phusion Holding B.V.
 #
 #  Permission is hereby granted, free of charge, to any person obtaining a copy
 #  of this software and associated documentation files (the "Software"), to deal
@@ -44,7 +45,7 @@ PhusionPassenger.require_passenger_lib 'platform_info/cxx_portability'
 include PhusionPassenger
 include PhusionPassenger::PlatformInfo
 
-require 'build/rake_extensions'
+require 'build/cxx_dependency_map'
 require 'build/cplusplus_support'
 
 #################################################
@@ -105,6 +106,13 @@ def maybe_wrap_in_ccache(command)
   end
 end
 
+def ensure_target_directory_exists(target)
+  dir = File.dirname(target)
+  if !File.exist?(dir)
+    sh "mkdir -p #{dir}"
+  end
+end
+
 #################################################
 
 if string_option('OUTPUT_DIR')
@@ -145,20 +153,33 @@ LIBEXT   = PlatformInfo.library_extension
 USE_DMALLOC = boolean_option('USE_DMALLOC')
 USE_EFENCE  = boolean_option('USE_EFENCE')
 USE_ASAN    = boolean_option('USE_ASAN')
+USE_SELINUX = boolean_option('USE_SELINUX')
 OPTIMIZE    = boolean_option('OPTIMIZE')
+LTO         = OPTIMIZE && boolean_option('LTO')
+
+CXX_SUPPORTLIB_INCLUDE_PATHS = [
+  "src/cxx_supportlib",
+  "src/cxx_supportlib/vendor-copy",
+  "src/cxx_supportlib/vendor-modified"
+]
 
 # Agent-specific compiler flags.
 AGENT_CFLAGS  = ""
-AGENT_CFLAGS << " #{PlatformInfo.adress_sanitizer_flag}" if USE_ASAN
 AGENT_CFLAGS << " -O" if OPTIMIZE
+AGENT_CFLAGS << " -DUSE_SELINUX" if USE_SELINUX
+AGENT_CFLAGS << " -flto" if LTO
+AGENT_CFLAGS << " #{PlatformInfo.adress_sanitizer_flag}" if USE_ASAN
 AGENT_CFLAGS.strip!
 
 # Agent-specific linker flags.
 AGENT_LDFLAGS = ""
+AGENT_LDFLAGS << " -O" if OPTIMIZE
+AGENT_LDFLAGS << " -flto" if LTO
 AGENT_LDFLAGS << " #{PlatformInfo.dmalloc_ldflags}" if USE_DMALLOC
 AGENT_LDFLAGS << " #{PlatformInfo.electric_fence_ldflags}" if USE_EFENCE
 AGENT_LDFLAGS << " #{PlatformInfo.adress_sanitizer_flag}" if USE_ASAN
-# Extra linker flags for backtrace_symbols() to generate useful output (see AgentsBase.cpp).
+AGENT_LDFLAGS << " -lselinux" if USE_SELINUX
+# Extra linker flags for backtrace_symbols() to generate useful output (see agent/Base.cpp).
 AGENT_LDFLAGS << " #{PlatformInfo.export_dynamic_flags}"
 # Enable dead symbol elimination on OS X.
 AGENT_LDFLAGS << " -Wl,-dead_strip" if PlatformInfo.os_name == "macosx"
@@ -195,14 +216,15 @@ AGENT_OUTPUT_DIR          = string_option('AGENT_OUTPUT_DIR', OUTPUT_DIR + "supp
 COMMON_OUTPUT_DIR         = string_option('COMMON_OUTPUT_DIR', OUTPUT_DIR + "common") + "/"
 APACHE2_OUTPUT_DIR        = string_option('APACHE2_OUTPUT_DIR', OUTPUT_DIR + "apache2") + "/"
 LIBEV_OUTPUT_DIR          = string_option('LIBEV_OUTPUT_DIR', OUTPUT_DIR + "libev") + "/"
-LIBEIO_OUTPUT_DIR         = string_option('LIBEIO_OUTPUT_DIR', OUTPUT_DIR + "libeio") + "/"
+LIBUV_OUTPUT_DIR          = string_option('LIBUV_OUTPUT_DIR', OUTPUT_DIR + "libuv") + "/"
 ruby_extension_archdir    = PlatformInfo.ruby_extension_binary_compatibility_id
 RUBY_EXTENSION_OUTPUT_DIR = string_option('RUBY_EXTENSION_OUTPUT_DIR',
   OUTPUT_DIR + "ruby/" + ruby_extension_archdir) + "/"
 PKG_DIR                   = string_option('PKG_DIR', "pkg")
+TEST_OUTPUT_DIR           = string_option('TEST_OUTPUT_DIR', OUTPUT_DIR + "test") + "/"
 
 
 # Whether to use the vendored libev or the system one.
 USE_VENDORED_LIBEV = boolean_option("USE_VENDORED_LIBEV", true)
-# Whether to use the vendored libeio or the system one.
-USE_VENDORED_LIBEIO = boolean_option("USE_VENDORED_LIBEIO", true)
+# Whether to use the vendored libuv or the system one.
+USE_VENDORED_LIBUV  = boolean_option("USE_VENDORED_LIBUV", true)

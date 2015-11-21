@@ -1,9 +1,10 @@
 #!/usr/bin/env ruby
 # encoding: binary
 #  Phusion Passenger - https://www.phusionpassenger.com/
-#  Copyright (c) 2010-2014 Phusion
+#  Copyright (c) 2010-2015 Phusion Holding B.V.
 #
-#  "Phusion Passenger" is a trademark of Hongli Lai & Ninh Bui.
+#  "Passenger", "Phusion Passenger" and "Union Station" are registered
+#  trademarks of Phusion Holding B.V.
 #
 #  Permission is hereby granted, free of charge, to any person obtaining a copy
 #  of this software and associated documentation files (the "Software"), to deal
@@ -25,7 +26,7 @@
 
 ## Magic comment: begin bootstrap ##
 source_root = File.expand_path("..", File.dirname(__FILE__))
-$LOAD_PATH.unshift("#{source_root}/lib")
+$LOAD_PATH.unshift("#{source_root}/src/ruby_supportlib")
 begin
   require 'rubygems'
 rescue LoadError
@@ -39,15 +40,19 @@ PhusionPassenger.locate_directories
 # the 'sbin' folders to $PATH just in case. On some systems
 # 'sbin' isn't in $PATH unless the user is logged in as root from
 # the start (i.e. not via 'su' or 'sudo').
-ENV["PATH"] += ":/usr/sbin:/sbin:/usr/local/sbin"
+EXTRA_INSTALLER_PATHS = ":/usr/sbin:/sbin:/usr/local/sbin"
+ENV["PATH"] += EXTRA_INSTALLER_PATHS
 
 require 'optparse'
 require 'stringio'
 PhusionPassenger.require_passenger_lib 'constants'
 PhusionPassenger.require_passenger_lib 'platform_info/ruby'
+PhusionPassenger.require_passenger_lib 'platform_info/operating_system'
+PhusionPassenger.require_passenger_lib 'platform_info/linux'
 PhusionPassenger.require_passenger_lib 'platform_info/apache'
 PhusionPassenger.require_passenger_lib 'platform_info/apache_detector'
 PhusionPassenger.require_passenger_lib 'abstract_installer'
+PhusionPassenger.require_passenger_lib 'config/validate_install_command'
 PhusionPassenger.require_passenger_lib 'utils/terminal_choice_menu'
 
 class Installer < PhusionPassenger::AbstractInstaller
@@ -71,7 +76,6 @@ class Installer < PhusionPassenger::AbstractInstaller
       'cc',
       'c++',
       'libcurl-dev',
-      'openssl-dev',
       'zlib-dev',
       'apache2',
       'apache2-dev',
@@ -99,12 +103,12 @@ class Installer < PhusionPassenger::AbstractInstaller
     return [specs, ids]
   end
 
-  def users_guide_path
-    return PhusionPassenger.apache2_doc_path
+  def install_doc_url
+    "https://www.phusionpassenger.com/library/install/apache/"
   end
 
-  def users_guide_url
-    return APACHE2_DOC_URL
+  def troubleshooting_doc_url
+    "https://www.phusionpassenger.com/library/admin/apache/troubleshooting/"
   end
 
   def run_steps
@@ -121,6 +125,7 @@ class Installer < PhusionPassenger::AbstractInstaller
 
     Dir.chdir(PhusionPassenger.build_system_dir)
     show_welcome_screen
+    check_selinux_and_suggest_rpm
     query_interested_languages
     check_gem_install_permission_problems || exit(1)
     check_directory_accessible_by_web_server
@@ -133,6 +138,7 @@ class Installer < PhusionPassenger::AbstractInstaller
     check_write_permission_to_web_server_config_files || exit(1)
     if compile_apache2_module
       install_apache2_config_snippets || exit(1)
+      validate_install
       show_deployment_example
     else
       show_possible_solutions_for_compilation_and_installation_problems
@@ -144,6 +150,28 @@ private
   def show_welcome_screen
     render_template 'apache2/welcome', :version => VERSION_STRING
     wait
+  end
+
+  def check_selinux_and_suggest_rpm
+    return if !PhusionPassenger.originally_packaged? ||
+      PlatformInfo.os_name != "linux" ||
+      !(PlatformInfo.linux_distro_tags.include?(:rhel) ||
+          PlatformInfo.linux_distro_tags.include?(:centos))
+      !PlatformInfo.find_command('sestatus')
+
+    begin
+      sestatus = `sestatus`
+      getenforce = `getenforce`
+    rescue Errno::ENOENT
+      return
+    end
+
+    status = sestatus.scan(/^SELinux status:.*/).first
+    if status =~ /enabled/ && getenforce =~ /Enforcing/
+      new_screen
+      render_template 'apache2/rpm_installation_recommended'
+      wait
+    end
   end
 
   def query_interested_languages
@@ -188,7 +216,7 @@ private
 
   def check_whether_there_are_multiple_apache_installs
     new_screen
-    puts '<banner>Sanity checking Apache installation...</banner>'
+    puts '<banner>Checking whether there are multiple Apache installations...</banner>'
 
     output = StringIO.new
     detector = PlatformInfo::ApacheDetector.new(output)
@@ -197,14 +225,26 @@ private
       detector.report
       @apache2 = detector.result_for(PlatformInfo.apxs2)
       if @apache2.nil?
-        render_template 'apache2/apache_install_broken',
-          :apxs2 => PlatformInfo.apxs2,
-          :sudo_s_e => PhusionPassenger::PlatformInfo.ruby_sudo_shell_command("-E"),
-          :ruby => PhusionPassenger::PlatformInfo.ruby_command,
-          :passenger_config => "#{PhusionPassenger.bin_dir}/passenger-config"
+        # Print an extra newline because the autodetection routines
+        # may have run some commands which printed stuff to stderr.
+        puts
+
+        if Process.uid == 0
+          render_template 'apache2/apache_install_broken',
+            :apxs2 => PlatformInfo.apxs2,
+            :extra_paths => EXTRA_INSTALLER_PATHS,
+            :sudo_s_e => PhusionPassenger::PlatformInfo.ruby_sudo_shell_command("-E"),
+            :ruby => PhusionPassenger::PlatformInfo.ruby_command,
+            :passenger_config => "#{PhusionPassenger.bin_dir}/passenger-config"
+        else
+          render_template 'apache2/run_installer_as_root_for_apache_analysis',
+            :sudo => PhusionPassenger::PlatformInfo.ruby_sudo_command,
+            :sudo_s_e => PhusionPassenger::PlatformInfo.ruby_sudo_shell_command("-E"),
+            :ruby => PhusionPassenger::PlatformInfo.ruby_command,
+            :installer => "#{PhusionPassenger.bin_dir}/passenger-install-apache2-module #{ORIG_ARGV.join(' ')}"
+        end
         return false
-      end
-      if detector.results.size > 1
+      elsif detector.results.size > 1
         other_installs = detector.results - [@apache2]
         render_template 'apache2/multiple_apache_installations_detected',
           :current => @apache2,
@@ -225,7 +265,7 @@ private
           return true
         end
       else
-        puts '<green>All good!</green>'
+        puts '<green>Only a single installation detected. This is good.</green>'
         return true
       end
     ensure
@@ -234,28 +274,41 @@ private
   end
 
   def check_whether_apache_uses_compatible_mpm
-    # 'httpd -V' output is in the form of:
+    # 'apache2ctl -V' output is in the form of:
     #
     # Server MPM:      Prefork     # <--- this line is not always available!
     # ...
     # Server compiled with....
     #  -D APACHE_MPM_DIR="server/mpm/prefork"
-    output = PlatformInfo.httpd_V
-    output =~ /^Server MPM: +(.*)$/
-    if $1
-      mpm = $1.downcase
-    else
-      output =~ /APACHE_MPM_DIR="server\/mpm\/(.*)"/
+    output = PlatformInfo.apache2ctl_V
+
+    if output
+      output =~ /^Server MPM: +(.*)$/
       if $1
         mpm = $1.downcase
       else
-        mpm = nil
+        output =~ /APACHE_MPM_DIR="server\/mpm\/(.*)"/
+        if $1
+          mpm = $1.downcase
+        else
+          mpm = nil
+        end
       end
-    end
-    if mpm != "prefork" && mpm != "worker" && mpm != "event"
+      if mpm != "prefork" && mpm != "worker" && mpm != "event"
+        new_screen
+        render_template 'apache2/apache_must_be_compiled_with_compatible_mpm',
+          :current_mpm => mpm
+        wait
+      end
+    elsif !@apache2.config_file_broken?
+      # 'output' may be nil because the config file is broken (see
+      # PlatformInfo.apache2ctl_V for more information), but we already
+      # warn the user about in #validate_install.
+      # So here we only warn about not being able to detect an MPM type
+      # if 'output' is nil but not as a result of the config file being broken.
       new_screen
-      render_template 'apache2/apache_must_be_compiled_with_compatible_mpm',
-        :current_mpm => mpm
+      render_template 'apache2/mpm_unknown',
+        :control_command => @apache2.ctl
       wait
     end
   end
@@ -368,10 +421,14 @@ private
   end
 
   def config_snippet
-    return "<IfModule mod_passenger.c>\n" +
+    result = "<IfModule mod_passenger.c>\n" +
       "  PassengerRoot #{PhusionPassenger.install_spec}\n" +
-      "  PassengerDefaultRuby #{PlatformInfo.ruby_command}\n" +
-      "</IfModule>"
+      "  PassengerDefaultRuby #{PlatformInfo.ruby_command}\n"
+    if PhusionPassenger.packaging_method == "rpm"
+      result << "  PassengerInstanceRegistryDir /var/run/passenger-instreg\n"
+    end
+    result << "</IfModule>"
+    result
   end
 
   def apache2_config_snippets
@@ -765,21 +822,49 @@ private
     wait
   end
 
+  def validate_install
+    # By compiling Passenger, we may have changed Apache's state. For example,
+    # if 'apache2ctl -V' failed because it referenced an Apache module that
+    # didn't exist, then it may exist now, causing 'apache2ctl -V' to succeed.
+    # We want ValidateInstallCommand to reflect the current Apache state,
+    # not the one before compilation started, so we clear PlatformInfo
+    # memoizations here.
+    PlatformInfo.clear_memoizations
+
+    new_screen
+    puts "<banner>Validating installation...</banner>"
+    puts
+    args = ["--validate-apache2", "--invoked-from-installer"]
+    args << "--auto" if @auto
+    # The validator will get the path to apxs2 from the APXS2 environment
+    # variable that this installer sets.
+    validator = PhusionPassenger::Config::ValidateInstallCommand.new(args)
+    exit_code = validator.run_and_get_exit_code
+    STDOUT.write(@colors.default_terminal_color)
+
+    case exit_code
+    when PhusionPassenger::Config::ValidateInstallCommand::FAIL_EXIT_CODE
+      puts "<b>Please solve the above issues, then press ENTER to continue.</b>"
+      wait
+    when PhusionPassenger::Config::ValidateInstallCommand::WARN_EXIT_CODE
+      puts "<b>Press ENTER to continue.</b>"
+      wait
+    else
+      exit(exit_code)
+    end
+  end
+
   def show_deployment_example
     new_screen
     render_template 'apache2/deployment_example',
-      :users_guide_path => users_guide_path,
-      :users_guide_url => users_guide_url,
+      :deployment_guide_url => "https://www.phusionpassenger.com/library/deploy/apache/deploy/",
       :phusion_website => PHUSION_WEBSITE,
-      :passenger_website => PASSENGER_WEBSITE,
-      :languages => @languages
+      :passenger_website => PASSENGER_WEBSITE
   end
 
   def show_possible_solutions_for_compilation_and_installation_problems
     new_screen
     render_template 'apache2/possible_solutions_for_compilation_and_installation_problems',
-      :users_guide_path => users_guide_path,
-      :users_guide_url => users_guide_url,
       :support_url => SUPPORT_URL
   end
 

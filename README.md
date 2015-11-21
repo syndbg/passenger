@@ -4,7 +4,7 @@
 
 What makes it so fast and reliable is its **C++** core, its **zero-copy** architecture, its **watchdog** system and its **hybrid** evented, multi-threaded and multi-process design.
 
-<a href="http://vimeo.com/phusionnl/review/80475623/c16e940d1f"><img src="http://blog.phusion.nl/wp-content/uploads/2014/01/gameofthrones.jpg" height="300"></a><br><em>Phusion Passenger used in Game of Thrones Ascention</em>
+<a href="http://vimeo.com/phusionnl/review/80475623/c16e940d1f"><img src="http://blog.phusion.nl/wp-content/uploads/2014/01/gameofthrones.jpg" height="300"></a><br><em>Phusion Passenger used in Game of Thrones Ascent</em>
 
 **Learn more:** [Website](https://www.phusionpassenger.com/) | [Documentation](https://www.phusionpassenger.com/documentation_and_support) | [Support resources](https://www.phusionpassenger.com/documentation_and_support) | [Github](https://github.com/phusion/passenger) | [Twitter](https://twitter.com/phusion_nl) | [Blog](http://blog.phusion.nl/)
 
@@ -16,7 +16,11 @@ Please follow [the installation instructions on the website](https://www.phusion
 
 ### Installing the source directly from git
 
-If you mean to install the latest version of Passenger directly from this git repository, then you should run one of the following commands. Installing from the git repository is basically the same as the tarball installation method, as [described in the manual](https://www.phusionpassenger.com/documentation/Users%20guide.html#installation).
+If you mean to install the latest version of Passenger directly from this git repository, then you should run one of the following commands. Installing from the git repository is basically the same as the tarball installation method, as [described in the manual](https://www.phusionpassenger.com/library/install/), with one exception: you need to clone git submodules:
+
+    git submodule update --init --recursive
+
+After that, run one of the following:
 
     ./bin/passenger-install-apache2-module
 
@@ -39,9 +43,9 @@ Ruby users can also build a gem from the Git repository and install the gem.
 ## Further reading
 
  * The `doc/` directory.
- * CONTRIBUTING.md.
+ * [Contributors Guide](https://github.com/phusion/passenger/blob/master/CONTRIBUTING.md)
  * https://www.phusionpassenger.com/support
 
 ## Legal
 
-Phusion Passenger is a trademark of Hongli Lai & Ninh Bui.
+"Passenger", "Phusion Passenger" and "Union Station" are registered trademarks of Phusion Holding B.V.
