@@ -27,6 +27,10 @@
 #ifndef _ADHOC_LVE_H_
 #define _ADHOC_LVE_H_
 
+// A library for using CloudLinux's LVE technology.
+// https://www.cloudlinux.com/lve-manage.php
+// http://docs.cloudlinux.com/understanding_lve.html
+
 #include <dlfcn.h>
 #include <errno.h>
 #include <stdint.h>
