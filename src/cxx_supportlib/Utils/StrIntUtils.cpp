@@ -205,6 +205,36 @@ toString(const vector<StaticString> &vec) {
 	return result;
 }
 
+unsigned long long
+pointerToULL(void *pointer) {
+	// Use wierd union construction to avoid compiler warnings.
+	if (sizeof(void *) == sizeof(unsigned int)) {
+		union {
+			void *pointer;
+			unsigned int value;
+		} u;
+		u.pointer = pointer;
+		return u.value;
+	} else if (sizeof(void *) == sizeof(unsigned long)) {
+		union {
+			void *pointer;
+			unsigned long value;
+		} u;
+		u.pointer = pointer;
+		return u.value;
+	} else if (sizeof(void *) == sizeof(unsigned long long)) {
+		union {
+			void *pointer;
+			unsigned long long value;
+		} u;
+		u.pointer = pointer;
+		return u.value;
+	} else {
+		fprintf(stderr, "Pointer size unsupported...\n");
+		abort();
+	}
+}
+
 string
 pointerToIntString(void *pointer) {
 	// Use wierd union construction to avoid compiler warnings.
@@ -212,6 +242,13 @@ pointerToIntString(void *pointer) {
 		union {
 			void *pointer;
 			unsigned int value;
+		} u;
+		u.pointer = pointer;
+		return toString(u.value);
+	} else if (sizeof(void *) == sizeof(unsigned long)) {
+		union {
+			void *pointer;
+			unsigned long value;
 		} u;
 		u.pointer = pointer;
 		return toString(u.value);
@@ -597,18 +634,24 @@ appendData(char *pos, const char *end, const StaticString &data) {
 string
 cEscapeString(const StaticString &input) {
 	string result;
+	result.reserve(input.size());
+	cEscapeString(input, result);
+	return result;
+}
+
+void
+cEscapeString(const StaticString &input, string &output) {
 	const char *current = input.c_str();
 	const char *end = current + input.size();
 
-	result.reserve(input.size());
 	while (current < end) {
 		char c = *current;
 		if (c >= 32 && c <= 126) {
 			// Printable ASCII.
 			if (c == '"') {
-				result.append("\"");
+				output.append("\"");
 			} else {
-				result.append(1, c);
+				output.append(1, c);
 			}
 		} else {
 			char buf[sizeof("000")];
@@ -616,29 +659,28 @@ cEscapeString(const StaticString &input) {
 
 			switch (c) {
 			case '\t':
-				result.append("\\t");
+				output.append("\\t");
 				break;
 			case '\n':
-				result.append("\\n");
+				output.append("\\n");
 				break;
 			case '\r':
-				result.append("\\r");
+				output.append("\\r");
 				break;
 			case '\e':
-				result.append("\\e");
+				output.append("\\e");
 				break;
 			default:
 				size = integerToOtherBase<unsigned char, 8>(
 					*current, buf, sizeof(buf));
-				result.append("\\", 1);
-				result.append(3 - size, '0');
-				result.append(buf, size);
+				output.append("\\", 1);
+				output.append(3 - size, '0');
+				output.append(buf, size);
 				break;
 			}
 		}
 		current++;
 	}
-	return result;
 }
 
 string

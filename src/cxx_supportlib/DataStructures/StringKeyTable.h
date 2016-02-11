@@ -1,6 +1,6 @@
 /*
  *  Phusion Passenger - https://www.phusionpassenger.com/
- *  Copyright (c) 2014 Phusion Holding B.V.
+ *  Copyright (c) 2014-2016 Phusion Holding B.V.
  *
  *  "Passenger", "Phusion Passenger" and "Union Station" are registered
  *  trademarks of Phusion Holding B.V.
@@ -107,6 +107,8 @@ public:
 	};
 
 private:
+	BOOST_COPYABLE_AND_MOVABLE(StringKeyTable<T, MoveSupport>)
+
 	Cell *m_cells;
 	unsigned short m_arraySize;
 	unsigned short m_population;
@@ -242,10 +244,12 @@ private:
 		} else {
 			m_storage = NULL;
 		}
+
+		nonEmptyIndex = other.nonEmptyIndex;
 	}
 
 	template<typename ValueType, typename LocalMoveSupport>
-	void realInsert(const HashedStaticString &key, ValueType val, bool overwrite) {
+	Interator realInsert(const HashedStaticString &key, ValueType val, bool overwrite) {
 		assert(!key.empty());
 		assert(key.size() <= MAX_KEY_LENGTH);
 		assert(m_population < MAX_ITEMS);
@@ -271,13 +275,13 @@ private:
 					cell->hash = key.hash();
 					copyOrMoveValue(val, cell->value, LocalMoveSupport());
 					nonEmptyIndex = cell - &m_cells[0];
-					return;
+					return Iterator(*this, cell);
 				} else if (compareKeys(cellKey, cell->keyLength, key)) {
 					// Cell matches.
 					if (overwrite) {
 						copyOrMoveValue(val, cell->value, LocalMoveSupport());
 					}
-					return;
+					return Iterator(*this, cell);
 				} else {
 					cell = SKT_CIRCULAR_NEXT(cell);
 				}
@@ -294,16 +298,46 @@ public:
 		copyTableFrom(other);
 	}
 
+	StringKeyTable(BOOST_RV_REF(StringKeyTable) other)
+		: m_cells(other.m_cells),
+		  m_arraySize(other.m_arraySize),
+		  m_population(other.m_population),
+		  nonEmptyIndex(other.nonEmptyIndex),
+		  m_storage(other.m_storage),
+		  m_storageSize(other.m_storageSize),
+		  m_storageUsed(other.m_storageUsed)
+	{
+		other.init(0, 0);
+	}
+
 	~StringKeyTable() {
 		delete[] m_cells;
 		free(m_storage);
 	}
 
-	StringKeyTable &operator=(const StringKeyTable &other) {
+	StringKeyTable &operator=(BOOST_COPY_ASSIGN_REF(StringKeyTable) other) {
 		if (this != &other) {
 			delete[] m_cells;
 			free(m_storage);
 			copyTableFrom(other);
+		}
+		return *this;
+	}
+
+	StringKeyTable &operator=(BOOST_RV_REF(StringKeyTable) other) {
+		if (this != &other) {
+			delete[] m_cells;
+			free(m_storage);
+
+			m_cells = other.m_cells;
+			m_arraySize = other.m_arraySize;
+			m_population = other.m_population;
+			nonEmptyIndex = other.nonEmptyIndex;
+			m_storage = other.m_storage;
+			m_storageSize = other.m_storageSize;
+			m_storageUsed = other.m_storageUsed;
+
+			other.init(0, 0);
 		}
 		return *this;
 	}
@@ -329,6 +363,14 @@ public:
 			m_storage = (char *) malloc(initialStorageSize);
 		}
 		m_storageUsed = 0;
+	}
+
+	Iterator lookupIterator(const HashedStaticString &key) {
+		return Iterator(*this, lookupCell(key));
+	}
+
+	ConstIterator lookupIterator(const HashedStaticString &key) const {
+		return ConstIterator(*this, lookupCell(key));
 	}
 
 	Cell *lookupCell(const HashedStaticString &key) {
@@ -430,12 +472,22 @@ public:
 		}
 	}
 
-	void insert(const HashedStaticString &key, const T &val, bool overwrite = true) {
-		realInsert<const T &, SKT_DisableMoveSupport>(key, val, overwrite);
+	template<typename Container>
+	void getKeys(Container &output) const {
+		ConstIterator it(this);
+
+		while (*it != NULL) {
+			output.push_back(it.getKey());
+			it.next();
+		}
 	}
 
-	void insertByMoving(const HashedStaticString &key, BOOST_RV_REF(T) val, bool overwrite = true) {
-		realInsert<BOOST_RV_REF(T), SKT_EnableMoveSupport>(key, boost::move(val), overwrite);
+	Iterator insert(const HashedStaticString &key, const T &val, bool overwrite = true) {
+		return realInsert<const T &, SKT_DisableMoveSupport>(key, val, overwrite);
+	}
+
+	Iterator insertByMoving(const HashedStaticString &key, BOOST_RV_REF(T) val, bool overwrite = true) {
+		return realInsert<BOOST_RV_REF(T), SKT_EnableMoveSupport>(key, boost::move(val), overwrite);
 	}
 
 	void erase(Cell *cell) {
@@ -549,6 +601,11 @@ public:
 			}
 		}
 
+		Iterator(StringKeyTable &table, Cell *cell)
+			: m_table(&table),
+			  m_cur(cell)
+			{ }
+
 		Cell *next() {
 			if (m_cur == NULL) {
 				// Already finished.
@@ -603,6 +660,11 @@ public:
 				m_cur = NULL;
 			}
 		}
+
+		ConstIterator(const StringKeyTable &table, const Cell *cell)
+			: m_table(&table),
+			  m_cur(cell)
+			{ }
 
 		const Cell *next() {
 			if (m_cur == NULL) {
