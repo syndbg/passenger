@@ -1,6 +1,6 @@
 # encoding: utf-8
 #  Phusion Passenger - https://www.phusionpassenger.com/
-#  Copyright (c) 2010-2015 Phusion Holding B.V.
+#  Copyright (c) 2010-2016 Phusion Holding B.V.
 #
 #  "Passenger", "Phusion Passenger" and "Union Station" are registered
 #  trademarks of Phusion Holding B.V.
@@ -146,14 +146,15 @@ end
 
 desc "Update the C++ dependency map"
 task :dependency_map do
-  sh "./dev/index_cxx_dependencies.rb > build/cxx_dependency_map.rb"
+  sh "./dev/index_cxx_dependencies.rb > build/support/cxx_dependency_map.rb"
 end
 
 dependencies = [
   COMMON_LIBRARY.link_objects,
   LIBBOOST_OXT,
   LIBEV_TARGET,
-  LIBUV_TARGET
+  LIBUV_TARGET,
+  LIBCURL_DEPENDENCY_TARGETS
 ].flatten.compact
 task :compile_app => dependencies do
   source = ENV['SOURCE'] || ENV['FILE'] || ENV['F']
@@ -176,7 +177,8 @@ task :compile_app => dependencies do
       :flags => [
         "-DSTANDALONE",
         LIBEV_CFLAGS,
-        LIBUV_CFLAGS
+        LIBUV_CFLAGS,
+        libcurl_cflags
       ]
     )
     create_cxx_executable(exe,
@@ -189,6 +191,7 @@ task :compile_app => dependencies do
         LIBBOOST_OXT_LINKARG,
         libev_libs,
         libuv_libs,
+        libcurl_libs,
         PlatformInfo.portability_cxx_ldflags
       ]
     )
