@@ -85,6 +85,9 @@ public:
 	static const unsigned short NON_EMPTY_INDEX_NONE = 65535;
 	static const unsigned short NON_EMPTY_INDEX_UNKNOWN = 65534;
 
+	class Iterator;
+	class ConstIterator;
+
 	struct Cell {
 		boost::uint32_t keyOffset: 24;
 		boost::uint8_t  keyLength;
@@ -107,7 +110,7 @@ public:
 	};
 
 private:
-	BOOST_COPYABLE_AND_MOVABLE(StringKeyTable<T, MoveSupport>)
+	BOOST_COPYABLE_AND_MOVABLE(StringKeyTable)
 
 	Cell *m_cells;
 	unsigned short m_arraySize;
@@ -249,7 +252,7 @@ private:
 	}
 
 	template<typename ValueType, typename LocalMoveSupport>
-	Interator realInsert(const HashedStaticString &key, ValueType val, bool overwrite) {
+	Iterator realInsert(const HashedStaticString &key, ValueType val, bool overwrite) {
 		assert(!key.empty());
 		assert(key.size() <= MAX_KEY_LENGTH);
 		assert(m_population < MAX_ITEMS);
