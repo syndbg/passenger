@@ -31,6 +31,7 @@
 #include <boost/cstdint.hpp>
 #include <algorithm>
 #include <string>
+#include <vector>
 #include <cstddef>
 
 #include <zlib.h>
@@ -38,6 +39,7 @@
 #include <cstddef>
 #include <cassert>
 
+#include <DataStructures/StringKeyTable.h>
 #include <MessageReadersWriters.h>
 #include <Exceptions.h>
 #include <StaticString.h>
@@ -61,19 +63,29 @@ private:
 	BOOST_MOVABLE_BUT_NOT_COPYABLE(Batch);
 
 	static const unsigned int MAGIC_SIZE = 4;
-	static const unsigned int PREAMBLE_SIZE = MAGIC_SIZE
+	static const unsigned int PREAMBLE_SIZE_WITHOUT_HEADER = MAGIC_SIZE
 		+ sizeof(boost::uint8_t)
-		+ sizeof(boost::uint8_t);
+		+ sizeof(boost::uint8_t)
+		+ sizeof(boost::uint32_t);
 	static const unsigned int ENTRY_HEADER_SIZE = sizeof(boost::uint32_t) * 2;
 
 
 	size_t uncompressedSize;
 	int compressionLevel;
 	boost::container::string data;
+	StringKeyTable<bool> keys;
+
+	StaticString getPreambleHeader() const {
+		return P_STATIC_STRING(
+			"{\"client_software\": \"" PROGRAM_NAME "\","
+			"\"client_software_version\": \"" PASSENGER_VERSION "\"}");
+	}
 
 	size_t createMetadataAndCalculateArchiveSize(Transaction *firstTxnInBatch) {
-		size_t size = PREAMBLE_SIZE;
+		size_t size = PREAMBLE_SIZE_WITHOUT_HEADER;
 		Transaction *transaction = firstTxnInBatch;
+
+		size += getPreambleHeader().size();
 
 		do {
 			transaction->createBatchArchiveMetadata();
@@ -94,6 +106,7 @@ private:
 		Transaction *transaction = firstTxnInBatch;
 		while (transaction != NULL) {
 			appendEntry(zlib, transaction);
+			registerKey(transaction->getUnionStationKey());
 			transaction = STAILQ_NEXT(transaction, nextInBatch);
 		}
 	}
@@ -174,6 +187,8 @@ private:
 		appendBinary(zlib, StaticString(MAGIC, MAGIC_SIZE));
 		appendNumber8(zlib, MAJOR_VERSION);
 		appendNumber8(zlib, MINOR_VERSION);
+		appendNumber32(zlib, getPreambleHeader().size());
+		appendBinary(zlib, getPreambleHeader());
 	}
 
 	void appendEntry(z_stream &zlib, Transaction *transaction) {
@@ -181,6 +196,10 @@ private:
 		appendNumber32(zlib, transaction->getBody().size());
 		appendBinary(zlib, transaction->getBatchArchiveMetadata());
 		appendBinary(zlib, transaction->getBody());
+	}
+
+	void registerKey(const HashedStaticString &key) {
+		keys.insert(key, true);
 	}
 
 public:
@@ -229,6 +248,18 @@ public:
 
 	size_t getUncompressedSize() const {
 		return uncompressedSize;
+	}
+
+	vector<string> getKeys() const {
+		StringKeyTable<bool>::ConstIterator it(keys);
+		vector<string> result;
+
+		while (*it != NULL) {
+			result.push_back(string(it.getKey().data(), it.getKey().size()));
+			it.next();
+		}
+
+		return result;
 	}
 };
 

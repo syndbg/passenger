@@ -39,11 +39,14 @@
 #include <Logging.h>
 #include <DataStructures/StringKeyTable.h>
 #include <Algorithms/MovingAverage.h>
+#include <Integrations/LibevJsonUtils.h>
 #include <Utils/StrIntUtils.h>
 #include <Utils/JsonUtils.h>
 #include <Utils/SystemTime.h>
 #include <Utils/VariantMap.h>
 #include <UstRouter/Transaction.h>
+#include <UstRouter/RemoteSink/Common.h>
+#include <UstRouter/RemoteSink/Segment.h>
 #include <UstRouter/RemoteSink/Batch.h>
 #include <UstRouter/RemoteSink/BatchingAlgorithm.h>
 
@@ -56,101 +59,132 @@ using namespace boost;
 using namespace oxt;
 
 
-template<typename Sender>
-class Batcher {
-public:
-	typedef boost::container::small_vector<Batch, 16> BatchList;
-
+class Batcher: public SegmentProcessor {
 private:
+	typedef StringKeyTable<SegmentPtr, SKT_EnableMoveSupport> SegmentsTable;
 
-	oxt::thread *thread;
-	Sender *sender;
+	struct BatchResult {
+		Segment::BatchList batches;
+		size_t totalBatchSize;
+		MonotonicTimeUsec processingTime;
+	};
+
+	Context * const context;
+	SegmentProcessor * const sender;
+	ev_async processingDoneSignal;
+	SegmentsTable segments;
 
 	mutable boost::mutex syncher;
-	boost::condition_variable cond;
-	StringKeyTable<Group> knownGroups;
-	Group unknownGroup;
-	size_t threshold, limit;
-	size_t totalBytesAdded, totalBytesQueued, totalBytesProcessing;
-	size_t bytesForwarded, bytesDropped, peakSize;
-	double avgProcessingSpeed, avgCompressionFactor;
-	unsigned int nForwarded, nDropped;
+	size_t threshold, limit, peakSize;
+	size_t bytesAccepted, bytesQueued, bytesProcessing, bytesForwarding, bytesForwarded, bytesDropped;
+	unsigned int nAccepted, nQueued, nProcessing, nForwarding, nForwarded, nDropped;
+	unsigned int nThreads;
 	int compressionLevel;
-	bool quit: 1;
-	bool quitImmediately: 1;
+	SegmentList segmentsToUnref;
+	ev_tstamp lastQueueAddTime;
+	MonotonicTimeUsec lastProcessingBeginTime;
+	MonotonicTimeUsec lastProcessingEndTime;
+	ev_tstamp lastDropTime;
+	bool started;
+	bool quit;
+	bool terminated;
 
-	void threadMain() {
+
+	struct ev_loop *getLoop() const {
+		return context->loop;
+	}
+
+	void threadMain(Segment *segment) {
+		char segmentNumberStr[32];
+		snprintf(segmentNumberStr, sizeof(segmentNumberStr), "Segment %u", segment->number);
+		TRACE_POINT_WITH_DATA(segmentNumberStr);
+
 		try {
-			realThreadMain();
+			waitForThreadInitializationSignal(segment);
+			realThreadMain(segment);
 		} catch (const thread_interrupted &) {
 			// Do nothing
 		} catch (const tracable_exception &e) {
 			P_WARN("ERROR: " << e.what() << "\n  Backtrace:\n" << e.backtrace());
 		}
+
+		boost::unique_lock<boost::mutex> l(syncher);
+		nThreads--;
+		delete segment->processorThread;
+		segment->processorThread = NULL;
+
+		// Let event loop unreference the segment and possibly terminate
+		// the Batcher.
+		STAILQ_INSERT_TAIL(&segmentsToUnref, segment, nextScheduledForUnreferencing);
+		ev_async_send(getLoop(), &processingDoneSignal);
 	}
 
-	void realThreadMain() {
+	void realThreadMain(Segment *segment) {
 		TRACE_POINT();
 		boost::unique_lock<boost::mutex> l(syncher);
 
 		while (true) {
 			UPDATE_TRACE_POINT();
-			while (!quit && STAILQ_EMPTY(&queued)) {
-				cond.wait(l);
+			while (!quit && segment->nQueued == 0) {
+				segment->processorCond.wait(l);
 			}
 
-			if (quitImmediately) {
-				return;
-			}
-
-			if (STAILQ_EMPTY(&queued)) {
-				// If quitImmediately is not set, we honor the quit signal only after
-				// having processed everything in the queue.
-				if (quit) {
-					return;
-				}
-			} else {
+			if (segment->nQueued > 0) {
 				UPDATE_TRACE_POINT();
-				TransactionList transactions = consumeQueue();
-				size_t bytesProcessing = this->bytesProcessing;
-				size_t nProcessing = this->nProcessing;
+				TransactionList transactions = consumeQueues(segment);
+				size_t bytesProcessing = segment->bytesProcessing;
+				size_t nProcessing = segment->nProcessing;
+				int compressionLevel = this->compressionLevel;
 				l.unlock();
 
 				UPDATE_TRACE_POINT();
-				pair<unsigned long long, size_t> batchResult = performBatching(
-					transactions, bytesProcessing, nProcessing);
+				BatchResult batchResult;
+				performBatching(segment, transactions, bytesProcessing, nProcessing,
+					compressionLevel, batchResult);
 
 				UPDATE_TRACE_POINT();
 				l.lock();
-				updateProcessingStatistics(batchResult.first, batchResult.second);
+				commitBatchResult(segment, batchResult);
+			} else {
+				break;
 			}
 		}
 	}
 
-	TransactionList consumeQueue() {
+	TransactionList consumeQueues(Segment *segment) {
 		TRACE_POINT();
 		TransactionList processing;
 
-		P_ASSERT_EQ(bytesProcessing, 0);
-		P_ASSERT_EQ(nProcessing, 0);
+		STAILQ_INIT(&processing);
 
-		bytesProcessing = bytesQueued;
-		nProcessing = nQueued;
-		STAILQ_SWAP(&queued, &processing, Transaction);
-		bytesQueued = 0;
-		nQueued = 0;
-		lastProcessingBeginTime = SystemTime::getUsec();
+		assert(bytesQueued >= segment->bytesQueued);
+		assert(nQueued >= segment->nQueued);
+		P_ASSERT_EQ(segment->bytesProcessing, 0);
+		P_ASSERT_EQ(segment->nProcessing, 0);
+
+		STAILQ_SWAP(&segment->queued, &processing, Transaction);
+		segment->bytesProcessing = segment->bytesQueued;
+		segment->nProcessing = segment->nQueued;
+		bytesQueued -= segment->bytesQueued;
+		nQueued -= segment->nQueued;
+		bytesProcessing += segment->bytesQueued;
+		nProcessing += segment->nQueued;
+		segment->bytesQueued = 0;
+		segment->nQueued = 0;
+		segment->lastProcessingBeginTime = lastProcessingBeginTime = SystemTime::getMonotonicUsec();
 
 		return processing;
 	}
 
-	pair<unsigned long long, size_t> performBatching(TransactionList &transactions,
-		size_t bytesProcessing, size_t nProcessing)
+	void performBatching(Segment *segment, TransactionList &transactions,
+		size_t bytesProcessing, size_t nProcessing, int compressionLevel,
+		BatchResult &result)
 	{
 		TRACE_POINT();
 		TransactionList undersizedTransactions, oversizedTransactions;
 
-		P_DEBUG("[RemoteSink batcher] Compressing and creating batches for "
+		P_DEBUG("[RemoteSink batcher (segment " << segment->number
+			<< ")] Compressing and creating batches for "
 			<< nProcessing << " transactions ("
 			<< (bytesProcessing / 1024) << " KB total)");
 
@@ -163,38 +197,33 @@ private:
 		BatchingAlgorithm::organizeUndersizedTransactionsIntoBatches(
 			undersizedTransactions, threshold);
 
-		BatchList batches;
-		BatchList::const_iterator it;
+		Segment::BatchList::const_iterator it;
 		unsigned long long startTime, endTime;
 		size_t totalBatchSize = 0;
 
 		UPDATE_TRACE_POINT();
-		startTime = SystemTime::getUsec();
+		startTime = SystemTime::getMonotonicUsec();
 		BatchingAlgorithm::createBatchObjectsForUndersizedTransactions(
-			undersizedTransactions, batches, compressionLevel);
+			undersizedTransactions, result.batches, compressionLevel);
 
 		UPDATE_TRACE_POINT();
 		BatchingAlgorithm::createBatchObjectsForOversizedTransactions(
-			oversizedTransactions, batches, compressionLevel);
-		endTime = SystemTime::getUsec();
+			oversizedTransactions, result.batches, compressionLevel);
+		endTime = SystemTime::getMonotonicUsec();
 
 		UPDATE_TRACE_POINT();
-		for (it = batches.begin(); it != batches.end(); it++) {
-			totalBatchSize += it->getDataSize();
-		}
-
-		P_DEBUG("[RemoteSink batcher] Compressed " << (bytesProcessing / 1024) << " KB to "
-			<< (countTotalCompressedSize(batches) / 1024) << " KB in "
+		result.processingTime = endTime - startTime;
+		result.totalBatchSize = countTotalCompressedSize(result.batches);
+		P_DEBUG("[RemoteSink batcher (segment " << segment->number
+			<< ")] Compressed " << (bytesProcessing / 1024) << " KB to "
+			<< (result.totalBatchSize / 1024) << " KB in "
 			<< std::fixed << std::setprecision(2) << ((endTime - startTime) / 1000000.0)
-			<< " sec, created " << batches.size() << " batches totalling "
+			<< " sec, created " << result.batches.size() << " batches totalling "
 			<< (totalBatchSize / 1024) << " KB");
-		sender->send(batches);
-
-		return std::make_pair(endTime - startTime, totalBatchSize);
 	}
 
-	size_t countTotalCompressedSize(const BatchList &batches) const {
-		BatchList::const_iterator it, end = batches.end();
+	size_t countTotalCompressedSize(const Segment::BatchList &batches) const {
+		Segment::BatchList::const_iterator it, end = batches.end();
 		size_t result = 0;
 
 		for (it = batches.begin(); it != end; it++) {
@@ -204,129 +233,335 @@ private:
 		return result;
 	}
 
-	void updateProcessingStatistics(unsigned long long processingTime, size_t totalBatchSize) {
-		avgProcessingSpeed = exponentialMovingAverage(avgProcessingSpeed,
-			(bytesProcessing / 1024.0) / (processingTime / 1000000.0),
+	void commitBatchResult(Segment *segment, BatchResult &batchResult) {
+		TRACE_POINT();
+		segment->avgBatchingSpeed = expMovingAverage(segment->avgBatchingSpeed,
+			(segment->bytesProcessing / 1024.0) / (batchResult.processingTime / 1000000.0),
 			0.5);
-		avgCompressionFactor = exponentialMovingAverage(avgCompressionFactor,
-			(double) totalBatchSize / bytesProcessing,
+		segment->avgCompressionFactor = expMovingAverage(segment->avgCompressionFactor,
+			(double) batchResult.totalBatchSize / segment->bytesProcessing,
 			0.5);
-		bytesForwarded += bytesProcessing;
-		nForwarded += nProcessing;
-		bytesProcessing = 0;
-		nProcessing = 0;
-		lastProcessingEndTime = SystemTime::getUsec();
+		segment->bytesForwarding += batchResult.totalBatchSize;
+		segment->nForwarding += batchResult.batches.size();
+		bytesProcessing -= segment->bytesProcessing;
+		nProcessing -= segment->nProcessing;
+		bytesForwarding += batchResult.totalBatchSize;
+		nForwarding += batchResult.batches.size();
+		segment->bytesProcessing = 0;
+		segment->nProcessing = 0;
+		segment->lastProcessingEndTime = lastProcessingEndTime = SystemTime::getMonotonicUsec();
+
+		UPDATE_TRACE_POINT();
+		Segment::BatchList::iterator it, end = batchResult.batches.end();
+		for (it = batchResult.batches.begin(); it != end; it++) {
+			Batch &batch = *it;
+			segment->forwarding.push_back(boost::move(batch));
+		}
+
+		ev_async_send(getLoop(), &processingDoneSignal);
+	}
+
+	void dropQueue(Segment *segment) {
+		Transaction *transaction, *nextTransaction;
+
+		assert(bytesQueued >= segment->bytesQueued);
+		assert(nQueued >= segment->nQueued);
+
+		bytesQueued -= segment->bytesQueued;
+		nQueued -= segment->nQueued;
+		bytesDropped += segment->bytesQueued;
+		nDropped += segment->nQueued;
+		segment->bytesDroppedByBatcher += segment->bytesQueued;
+		segment->nDroppedByBatcher += segment->nQueued;
+		segment->bytesQueued = 0;
+		segment->nQueued = 0;
+
+		STAILQ_FOREACH_SAFE(transaction, &segment->queued, next, nextTransaction) {
+			delete transaction;
+		}
+		STAILQ_INIT(&segment->queued);
+	}
+
+	static void onProcessingDone(EV_P_ ev_async *async, int revents) {
+		Batcher *batcher = static_cast<Batcher *>(async->data);
+		batcher->processingDone();
+	}
+
+	bool isTerminatable() const {
+		return quit && nThreads == 0 && !terminated;
+	}
+
+	void terminate() {
+		TRACE_POINT();
+		SegmentsTable::ConstIterator it(segments);
+
+		while (*it != NULL) {
+			const SegmentPtr &segment = it.getValue();
+
+			assert(STAILQ_EMPTY(&segment->queued));
+			P_ASSERT_EQ(segment->processorThread, NULL);
+
+			segment->forwarding.clear();
+
+			it.next();
+		}
+
+		segments.clear();
+
+		if (ev_is_active(&processingDoneSignal)) {
+			ev_async_stop(getLoop(), &processingDoneSignal);
+		}
+
+		terminated = true;
+	}
+
+	size_t calculateSegmentListTotalIncomingTransactionsSize(const SegmentList &segments) const {
+		const Segment *segment;
+		size_t result = 0;
+
+		STAILQ_FOREACH(segment, &segments, nextScheduledForBatching) {
+			result += segment->bytesIncomingTransactions;
+		}
+
+		return result;
+	}
+
+	int getEffectiveCompressionLevel() const {
+		if (compressionLevel == Z_DEFAULT_COMPRESSION) {
+			return 6;
+		} else {
+			return compressionLevel;
+		}
 	}
 
 	string getRecommendedBufferLimit() const {
 		return toString(peakSize * 2 / 1024) + " KB";
 	}
 
-	Json::Value inspectTotalAsJson() const {
-		Json::Value doc;
+	size_t totalMemoryBuffered() const {
+		return bytesQueued + bytesProcessing + bytesForwarding;
+	}
 
-		doc["size"] = byteSizeToJson(bytesQueued + bytesProcessing);
-		doc["count"] = nQueued + nProcessing;
-		doc["peak_size"] = byteSizeToJson(peakSize);
-		doc["limit"] = byteSizeToJson(limit);
+	Json::Value inspectSegmentsAsJson(ev_tstamp evNow, MonotonicTimeUsec monoNow,
+		unsigned long long now) const
+	{
+		Json::Value doc(Json::objectValue);
+		SegmentsTable::ConstIterator it(segments);
+
+		while (*it != NULL) {
+			const Segment *segment = it.getValue().get();
+			Json::Value subdoc;
+
+			subdoc["thread_active"] = segment->processorThread != NULL;
+
+			subdoc["incoming"] = byteSizeAndCountToJson(segment->bytesIncomingTransactions,
+				segment->nIncomingTransactions);
+			subdoc["queued"] = byteSizeAndCountToJson(segment->bytesQueued,
+				segment->nQueued);
+			subdoc["processing"] = byteSizeAndCountToJson(segment->bytesProcessing,
+				segment->nProcessing);
+			subdoc["forwarding"] = byteSizeAndCountToJson(segment->bytesForwarding,
+				segment->nForwarding);
+			subdoc["dropped"] = byteSizeAndCountToJson(segment->bytesDroppedByBatcher,
+				segment->nDroppedByBatcher);
+
+			subdoc["last_queue_add_time"] = evTimeToJson(segment->lastQueueAddTime,
+				evNow, now);
+			subdoc["last_processing_begin_time"] = monoTimeToJson(segment->lastProcessingBeginTime,
+				monoNow, now);
+			subdoc["last_processing_end_time"] = monoTimeToJson(segment->lastProcessingEndTime,
+				monoNow, now);
+			subdoc["last_drop_time"] = evTimeToJson(segment->lastDroppedByBatcherTime,
+				evNow, now);
+
+			subdoc["average_batching_speed"] = byteSpeedToJson(
+				segment->avgBatchingSpeed / 1000000.0, -1, "second");
+			if (segment->avgCompressionFactor == -1) {
+				subdoc["average_compression_factor"] = Json::Value(Json::nullValue);
+			} else {
+				subdoc["average_compression_factor"] = segment->avgCompressionFactor;
+			}
+
+			doc[toString(segment->number)] = subdoc;
+			it.next();
+		}
 
 		return doc;
 	}
 
+protected:
+	// Virtual so that it can be mocked by unit tests.
+	virtual void waitForThreadInitializationSignal(Segment *segment) {
+		// Do nothing by default
+	}
+
 public:
-	// TODO: different batch groups based on load balancer manifest responses
-	Batcher(Sender *_sender, const VariantMap &options)
-		: thread(NULL),
+	Batcher(Context *_context, SegmentProcessor *_sender, const VariantMap &options)
+		: context(_context),
 		  sender(_sender),
-		  threshold(options.getULL("union_station_batch_threshold")),
-		  limit(options.getULL("union_station_batch_limit")),
-		  totalBytesAdded(0),
-		  totalBytesQueued(0),
-		  totalBytesProcessing(0),
+		  threshold(options.getULL("union_station_batcher_threshold")),
+		  limit(options.getULL("union_station_batcher_memory_limit")),
+		  peakSize(0),
+		  bytesAccepted(0),
+		  bytesQueued(0),
+		  bytesProcessing(0),
+		  bytesForwarding(0),
 		  bytesForwarded(0),
 		  bytesDropped(0),
-		  peakSize(0),
-		  avgProcessingSpeed(AVG_NOT_AVAILABLE),
-		  avgCompressionFactor(AVG_NOT_AVAILABLE),
+		  nAccepted(0),
+		  nQueued(0),
+		  nProcessing(0),
+		  nForwarding(0),
 		  nForwarded(0),
 		  nDropped(0),
+		  nThreads(0),
 		  compressionLevel(options.getULL("union_station_compression_level",
 		      false, Z_DEFAULT_COMPRESSION)),
-		  quit(false)
-		{ }
+		  lastQueueAddTime(0),
+		  lastProcessingBeginTime(0),
+		  lastProcessingEndTime(0),
+		  lastDropTime(0),
+		  started(false),
+		  quit(false),
+		  terminated(false)
+	{
+		memset(&processingDoneSignal, 0, sizeof(processingDoneSignal));
+		ev_async_init(&processingDoneSignal, onProcessingDone);
+		processingDoneSignal.data = this;
+		STAILQ_INIT(&segmentsToUnref);
+	}
 
 	~Batcher() {
-		shutdown();
-		waitForTermination();
+		assert(!started || terminated);
 	}
 
 	void start() {
-		thread = new oxt::thread(boost::bind(&Batcher::threadMain, this),
-			"RemoteSink batcher", 1024 * 1024);
+		started = true;
+		ev_async_start(getLoop(), &processingDoneSignal);
 	}
 
-	void shutdown(bool dropQueuedWork = false) {
+	bool shutdown(bool dropQueuedWork = false) {
+		TRACE_POINT();
 		boost::lock_guard<boost::mutex> l(syncher);
 		quit = true;
-		quitImmediately = quitImmediately || dropQueuedWork;
-		cond.notify_one();
-	}
 
-	void waitForTermination() {
-		if (thread != NULL) {
-			thread->join();
-			delete thread;
-			thread = NULL;
-		}
+		SegmentsTable::Iterator it(segments);
+		while (*it != NULL) {
+			Segment *segment = it.getValue().get();
 
-		boost::lock_guard<boost::mutex> l(syncher);
-		if (quitImmediately) {
-			Transaction *transaction = STAILQ_FIRST(&queued);
-			while (transaction != NULL) {
-				Transaction *next = STAILQ_NEXT(transaction, next);
-				delete transaction;
-				transaction = next;
+			if (dropQueuedWork) {
+				dropQueue(segment);
 			}
-			STAILQ_INIT(&queued);
+
+			segment->processorCond.notify_one();
+			it.next();
 		}
-		assert(STAILQ_EMPTY(&queued));
+
+		if (isTerminatable()) {
+			terminate();
+			return true;
+		} else {
+			return false;
+		}
 	}
 
-	void add(TransactionList &transactions, size_t totalBodySize, unsigned int count,
-		size_t &bytesAdded, unsigned int &nAdded, ev_tstamp now)
-	{
+	bool isTerminated() const {
 		boost::lock_guard<boost::mutex> l(syncher);
+		return terminated;
+	}
 
-		bytesAdded = 0;
-		nAdded = 0;
-		peakSize = std::max(peakSize, totalBytesQueued + totalBytesProcessing + totalBodySize);
+	void schedule(SegmentList &segments) {
+		TRACE_POINT();
+		Segment *segment;
+		SegmentPtr *ourSegment;
+		Transaction *transaction;
+		char address[sizeof(Segment *)];
+		bool droppedSome = false;
+		boost::lock_guard<boost::mutex> l(syncher);
+		assert(started);
 
-		while (nAdded < count && totalBytesQueued + totalBytesProcessing <= limit) {
-			assert(!STAILQ_EMPTY(&transactions));
-			Transaction *transaction = STAILQ_FIRST(&transactions);
-			size_t size = transaction->getBody().size();
-			STAILQ_REMOVE_HEAD(&transactions, next);
+		peakSize = std::max(peakSize, totalMemoryBuffered()
+			+ calculateSegmentListTotalIncomingTransactionsSize(segments));
 
-			Group *group = grouper.group(transaction);
-			STAILQ_INSERT_TAIL(&group->queued, transaction, next);
-			group->bytesAdded += size;
-			group->bytesQueued += size;
-			group->nAdded++;
-			group->nQueued++;
-			totalBytesAdded += size;
-			totalBytesQueued += size;
+		STAILQ_FOREACH(segment, &segments, nextScheduledForBatching) {
+			memcpy(address, &segment, sizeof(Segment *));
+			HashedStaticString addressString(address, sizeof(address));
 
-			bytesAdded += size;
-			nAdded++;
+			// Add this segment to our segments hash table if we
+			// don't already have it.
+			if (this->segments.lookup(addressString, &ourSegment)) {
+				P_ASSERT_EQ(segment, ourSegment->get());
+			} else if (OXT_LIKELY(!quit)) {
+				segment->ref(); // Reference by thread
+				segment->processorThread = new oxt::thread(
+					boost::bind(&Batcher::threadMain, this, segment),
+					"RemoteSink batcher: segment " + toString(segment->number),
+					1024 * 1024);
+				this->segments.insertByMoving(addressString, SegmentPtr(segment));
+				nThreads++;
+			}
+
+			STAILQ_REMOVE(&segments, segment, Segment, nextScheduledForBatching);
+
+			// Move the transactions that we can accept within our limits
+			// into the queue.
+			while (!quit
+				&& !STAILQ_EMPTY(&segment->incomingTransactions)
+				&& totalMemoryBuffered() < limit)
+			{
+				transaction = STAILQ_FIRST(&segment->incomingTransactions);
+				size_t bodySize = transaction->getBody().size();
+
+				STAILQ_REMOVE_HEAD(&segment->incomingTransactions, next);
+				STAILQ_INSERT_TAIL(&segment->queued, transaction, next);
+
+				if (segment->nQueued == 0) {
+					segment->processorCond.notify_one();
+				}
+
+				assert(segment->bytesIncomingTransactions >= bodySize);
+				assert(segment->nIncomingTransactions > 0);
+				segment->bytesIncomingTransactions -= bodySize;
+				segment->nIncomingTransactions--;
+				segment->bytesQueued += bodySize;
+				segment->nQueued++;
+				segment->lastQueueAddTime = lastQueueAddTime = ev_now(getLoop());
+
+				bytesQueued += bodySize;
+				nQueued++;
+
+				bytesAccepted += bodySize;
+				nAccepted++;
+			}
+
+			// Drop any transactions that we can't accept due to limits,
+			// or that we can't accept because we're quitting.
+			while (!STAILQ_EMPTY(&segment->incomingTransactions)) {
+				transaction = STAILQ_FIRST(&segment->incomingTransactions);
+				size_t bodySize = transaction->getBody().size();
+
+				assert(segment->bytesIncomingTransactions >= bodySize);
+				assert(segment->nIncomingTransactions > 0);
+				segment->bytesIncomingTransactions -= bodySize;
+				segment->nIncomingTransactions--;
+				segment->bytesDroppedByBatcher += bodySize;
+				segment->nDroppedByBatcher++;
+				segment->lastDroppedByBatcherTime = lastDropTime = ev_now(getLoop());
+
+				bytesDropped += bodySize;
+				nDropped++;
+
+				droppedSome = true;
+				STAILQ_REMOVE_HEAD(&segment->incomingTransactions, next);
+				delete transaction;
+			}
 		}
 
-		if (nAdded != count) {
-			assert(totalBytesQueued + totalBytesProcessing > limit);
-			assert(totalBodySize > bytesAdded);
-			bytesDropped += totalBodySize - bytesAdded;
-			nDropped += count - nAdded;
+		STAILQ_INIT(&segments);
 
-			if (compressionLevel > 3) {
+		if (droppedSome && !quit) {
+			assert(bytesQueued + bytesProcessing > limit);
+			if (getEffectiveCompressionLevel() > 3) {
 				P_WARN("Unable to batch and compress Union Station data quickly enough. "
 					"Please lower the compression level to speed up compression, or "
 					"increase the batch buffer's limit (recommended limit: "
@@ -339,14 +574,53 @@ public:
 					+ ")");
 			}
 		}
-
-		pass unknown keys to server database updater;
-
-		cond.notify_one();
 	}
 
-	void onServerDatabaseUpdate(const vector< vector<string> > &groupedKeys) {
+	void processingDone() {
+		TRACE_POINT();
+		SegmentsTable::Iterator it(segments);
+		SegmentList segmentsToForward;
+		Segment *segment;
 
+		STAILQ_INIT(&segmentsToForward);
+
+		boost::lock_guard<boost::mutex> l(syncher);
+		assert(started);
+
+		while (*it != NULL) {
+			segment = it.getValue().get();
+			if (!segment->forwarding.empty()) {
+				bytesForwarding -= segment->bytesForwarding;
+				nForwarding -= segment->nForwarding;
+				bytesForwarded += segment->bytesForwarding;
+				nForwarded += segment->nForwarding;
+				segment->bytesForwarding = 0;
+				segment->nForwarding = 0;
+				segment->incomingBatches = boost::move(segment->forwarding);
+				STAILQ_INSERT_TAIL(&segmentsToForward, segment, nextScheduledForSending);
+			}
+			it.next();
+		}
+
+		UPDATE_TRACE_POINT();
+		if (!STAILQ_EMPTY(&segmentsToForward)) {
+			sender->schedule(segmentsToForward);
+			assert(STAILQ_EMPTY(&segmentsToForward));
+		}
+
+		UPDATE_TRACE_POINT();
+		while (!STAILQ_EMPTY(&segmentsToUnref)) {
+			segment = STAILQ_FIRST(&segmentsToUnref);
+			STAILQ_REMOVE(&segmentsToUnref, segment, Segment,
+				nextScheduledForUnreferencing);
+			segment->unref();
+		}
+		STAILQ_INIT(&segmentsToUnref);
+
+		UPDATE_TRACE_POINT();
+		if (isTerminatable()) {
+			terminate();
+		}
 	}
 
 	void setThreshold(size_t newThreshold) {
@@ -364,57 +638,44 @@ public:
 		compressionLevel = newLevel;
 	}
 
-	void configure(const Json::Value &config) {
-		boost::lock_guard<boost::mutex> l(syncher);
-		threshold = getJsonUint64Field(config, "union_station_batch_threshold",
-			threshold);
-		limit = getJsonUint64Field(config, "union_station_batch_limit",
-			limit);
-		compressionLevel = getJsonUint64Field(config, "union_station_compression_level",
-			compressionLevel);
-	}
-
 	Json::Value inspectStateAsJson() const {
 		Json::Value doc;
 		boost::lock_guard<boost::mutex> l(syncher);
+		ev_tstamp evNow = ev_now(getLoop());
+		MonotonicTimeUsec monoNow = SystemTime::getMonotonicUsecWithGranularity
+			<SystemTime::GRAN_10MSEC>();
+		unsigned long long now = SystemTime::getUsec();
 
-		doc["total_in_memory"] = inspectTotalAsJson();
+		doc["total_memory"]["size"] = byteSizeToJson(totalMemoryBuffered());
+		doc["total_memory"]["count"] = nQueued + nProcessing + nForwarding;
+		doc["total_memory"]["peak_size"] = byteSizeToJson(peakSize);
+		doc["total_memory"]["limit"] = byteSizeToJson(limit);
+
 		doc["threshold"] = byteSizeToJson(threshold);
-		doc["compression_level"] = compressionLevel;
-		doc["average_processing_speed"] = byteSpeedToJson(
-			avgProcessingSpeed / 1000000.0, -1, "second");
-		if (avgCompressionFactor == -1) {
-			doc["average_compression_factor"] = Json::Value(Json::nullValue);
-		} else {
-			doc["average_compression_factor"] = avgCompressionFactor;
-		}
-
+		doc["compression_level"] = getEffectiveCompressionLevel();
+		doc["accepted"] = byteSizeAndCountToJson(bytesAccepted, nAccepted);
 		doc["queued"] = byteSizeAndCountToJson(bytesQueued, nQueued);
 		doc["processing"] = byteSizeAndCountToJson(bytesProcessing, nProcessing);
+		doc["forwarding"] = byteSizeAndCountToJson(bytesForwarding, nForwarding);
 		doc["forwarded"] = byteSizeAndCountToJson(bytesForwarded, nForwarded);
 		doc["dropped"] = byteSizeAndCountToJson(bytesDropped, nDropped);
+		doc["segments"] = inspectSegmentsAsJson(evNow, monoNow, now);
 
-		if (lastQueueAddTime == 0) {
-			doc["last_queue_add_time"] = Json::Value(Json::nullValue);
-		} else {
-			doc["last_queue_add_time"] = timeToJson(lastQueueAddTime);
+		if (quit) {
+			if (terminated) {
+				doc["state"] = "TERMINATED";
+			} else {
+				doc["state"] = "SHUTTING_DOWN";
+			}
 		}
-		if (lastProcessingBeginTime == 0) {
-			doc["last_processing_begin_time"] = Json::Value(Json::nullValue);
-		} else {
-			doc["last_processing_begin_time"] = timeToJson(lastProcessingBeginTime);
-		}
-		if (lastProcessingEndTime == 0) {
-			doc["last_processing_end_time"] = Json::Value(Json::nullValue);
-		} else {
-			doc["last_processing_end_time"] = timeToJson(lastProcessingEndTime);
-		}
-		if (lastProcessingBeginTime == 0 || lastProcessingEndTime == 0) {
-			doc["last_processing_duration"] = Json::Value(Json::nullValue);
-		} else {
-			doc["last_processing_duration"] = durationToJson(
-				lastProcessingEndTime - lastProcessingBeginTime);
-		}
+		doc["last_queue_add_time"] = evTimeToJson(lastQueueAddTime,
+			evNow, now);
+		doc["last_processing_begin_time"] = monoTimeToJson(lastProcessingBeginTime,
+			monoNow, now);
+		doc["last_processing_end_time"] = monoTimeToJson(lastProcessingEndTime,
+			monoNow, now);
+		doc["last_drop_time"] = evTimeToJson(lastDropTime,
+			evNow, now);
 
 		return doc;
 	}

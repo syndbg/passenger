@@ -26,14 +26,17 @@
 #ifndef _PASSENGER_UST_ROUTER_REMOTE_SINK_SERVER_H_
 #define _PASSENGER_UST_ROUTER_REMOTE_SINK_SERVER_H_
 
-#include <boost/thread.hpp>
 #include <boost/shared_ptr.hpp>
 #include <string>
+#include <algorithm>
 #include <cassert>
 #include <cstddef>
 
+#include <ev.h>
+
 #include <Logging.h>
-#include <ExponentialMovingAverage.h>
+#include <Algorithms/MovingAverage.h>
+#include <Integrations/LibevJsonUtils.h>
 #include <Utils/JsonUtils.h>
 #include <Utils/SystemTime.h>
 
@@ -45,21 +48,26 @@ using namespace std;
 
 
 class Server {
-private:
-	const string pingURL, sinkURL;
-	unsigned int number;
+public:
+	enum {
+		DEFAULT_LIVELINESS_CHECK_PERIOD = 60
+	};
 
-	mutable boost::mutex syncher;
-	unsigned int weight;
-	unsigned int nSent, nAccepted, nRejected, nDropped;
+private:
+	const string baseUrl, pingUrl, sinkUrlWithoutCompression, sinkUrlWithCompression;
+	const unsigned int weight, number;
+
+	unsigned int nSent, nAccepted, nRejected, nDropped, nActiveRequests;
 	size_t bytesSent, bytesAccepted, bytesRejected, bytesDropped;
-	unsigned long long lastRequestBeginTime, lastRequestEndTime;
-	unsigned long long lastAcceptTime, lastRejectionErrorTime, lastDropErrorTime;
+	ev_tstamp lastRequestBeginTime, lastRequestEndTime;
+	ev_tstamp lastAcceptTime, lastRejectionErrorTime, lastDropErrorTime, lastLivelinessOkTime;
+	ev_tstamp lastLivelinessCheckInitiateTime, lastLivelinessCheckEndTime, lastLivelinessCheckErrorTime;
 	double avgUploadTime, avgUploadSpeed, avgServerProcessingTime;
-	DiscExponentialAverage<700, 5 * 1000000, 10 * 1000000> bandwidthUsage;
-	unsigned long long lastRejectionErrorTime, lastDropErrorTime;
-	string lastRejectionErrorMessage, lastDropErrorMessage;
+	DiscExpMovingAverageWithStddev<700, 5 * 1000000, 10 * 1000000> bandwidthUsage;
+	unsigned int livelinessCheckPeriod;
+	string lastRejectionErrorMessage, lastDropErrorMessage, lastLivelinessCheckErrorMessage;
 	bool up;
+	bool checkingLiveliness;
 
 	Json::Value inspectBandwidthUsageAsJson() const {
 		if (bandwidthUsage.available()) {
@@ -75,15 +83,18 @@ private:
 	}
 
 public:
-	Server(const StaticString &baseURL, unsigned int _weight)
-		: pingURL(baseURL + "/ping"),
-		  sinkURL(baseURL + "/sink"),
-		  number(0),
+	Server(unsigned int _number, const StaticString &_baseUrl, unsigned int _weight)
+		: baseUrl(_baseUrl.data(), _baseUrl.size()),
+		  pingUrl(_baseUrl + "/ping"),
+		  sinkUrlWithoutCompression(_baseUrl + "/sink"),
+		  sinkUrlWithCompression(_baseUrl + "/sink?compressed=1"),
 		  weight(_weight),
+		  number(_number),
 		  nSent(0),
 		  nAccepted(0),
 		  nRejected(0),
 		  nDropped(0),
+		  nActiveRequests(0),
 		  bytesSent(0),
 		  bytesAccepted(0),
 		  bytesRejected(0),
@@ -93,121 +104,155 @@ public:
 		  lastAcceptTime(0),
 		  lastRejectionErrorTime(0),
 		  lastDropErrorTime(0),
+		  lastLivelinessOkTime(0),
+		  lastLivelinessCheckInitiateTime(0),
+		  lastLivelinessCheckEndTime(0),
+		  lastLivelinessCheckErrorTime(0),
 		  avgUploadTime(-1),
 		  avgUploadSpeed(-1),
 		  avgServerProcessingTime(-1),
-		  lastRejectionErrorTime(0),
-		  lastDropErrorTime(0),
-		  up(true)
+		  livelinessCheckPeriod(DEFAULT_LIVELINESS_CHECK_PERIOD),
+		  up(true),
+		  checkingLiveliness(false)
 	{
 		assert(_weight > 0);
 	}
 
-	const string &getPingURL() const {
-		return pingURL;
+	const string &getBaseUrl() const {
+		return baseUrl;
 	}
 
-	const string &getSinkURL() const {
-		return sinkURL;
+	const string &getPingUrl() const {
+		return pingUrl;
+	}
+
+	const string &getSinkUrlWithCompression() const {
+		return sinkUrlWithCompression;
+	}
+
+	const string &getSinkUrlWithoutCompression() const {
+		return sinkUrlWithoutCompression;
 	}
 
 	unsigned int getWeight() const {
-		boost::lock_guard<boost::mutex> l(syncher);
 		return weight;
 	}
 
+	unsigned int getNumber() const {
+		return number;
+	}
+
 	bool isUp() const {
-		boost::lock_guard<boost::mutex> l(syncher);
 		return up;
 	}
 
-	void setUp(bool _up) {
-		boost::lock_guard<boost::mutex> l(syncher);
-		up = _up;
-	}
-
-	void setNumber(unsigned int n) {
-		number = n;
+	bool isCheckingLiveliness() const {
+		return checkingLiveliness;
 	}
 
 	bool equals(const Server &other) const {
-		return pingURL == other.getPingURL()
-			&& sinkURL == other.getSinkURL()
-			&& weight == other.getWeight();
+		return baseUrl == other.getBaseUrl() && weight == other.getWeight();
 	}
 
-	void update(const Server &other) {
-		P_ASSERT_EQ(pingURL, other.getPingURL());
-		P_ASSERT_EQ(sinkURL, other.getSinkURL());
-		boost::lock_guard<boost::mutex> l(syncher);
-		weight = other.getWeight();
-		up = other.getUp();
+	ev_tstamp getNextLivelinessCheckTime(ev_tstamp now) const {
+		if (up || lastDropErrorTime == 0) {
+			return 0;
+		} else {
+			ev_tstamp base = std::max(lastDropErrorTime, lastLivelinessCheckEndTime);
+			return std::max(now, base + livelinessCheckPeriod);
+		}
 	}
 
-	void reportRequestBegin() {
-		boost::lock_guard<boost::mutex> l(syncher);
+	void setLivelinessCheckPeriod(unsigned int value) {
+		livelinessCheckPeriod = value;
+	}
+
+	bool isBeingCheckedForLiveliness() const {
+		return checkingLiveliness;
+	}
+
+	void reportRequestBegin(ev_tstamp now) {
 		nSent++;
 		nActiveRequests++;
-		lastRequestBeginTime = SystemTime::getUsec();
+		lastRequestBeginTime = now;
 	}
 
-	void reportRequestAccepted(size_t uploadSize, unsigned long long uploadTime,
-		unsigned long long serverProcessingTime)
+	void reportRequestAccepted(size_t uploadSize, ev_tstamp uploadTime,
+		ev_tstamp serverProcessingTime, ev_tstamp now)
 	{
-		boost::lock_guard<boost::mutex> l(syncher);
-		unsigned long long now = SystemTime::getUsec();
-
 		nAccepted++;
 		nActiveRequests--;
 		bytesAccepted += uploadSize;
 		lastRequestEndTime = now;
 		lastAcceptTime = now;
+		lastLivelinessOkTime = now;
 
-		avgUploadTime = exponentialMovingAverage(avgUploadTime, uploadTime, 0.5);
-		avgUploadSpeed = exponentialMovingAverage(avgUploadSpeed,
+		avgUploadTime = expMovingAverage(avgUploadTime, uploadTime, 0.5);
+		avgUploadSpeed = expMovingAverage(avgUploadSpeed,
 			uploadSize / uploadTime, 0.5);
-		avgServerProcessingTime = exponentialMovingAverage(
+		avgServerProcessingTime = expMovingAverage(
 			avgServerProcessingTime, serverProcessingTime, 0.5);
-		bandwidthUsage.update(uploadSize / uploadTime, now);
+		bandwidthUsage.update(uploadSize / uploadTime, now * 1000000);
 	}
 
-	void reportRequestRejected(size_t uploadSize, unsigned long long uploadTime,
-		const string &errorMessage, unsigned long long now = 0)
+	void reportRequestRejected(size_t uploadSize, ev_tstamp uploadTime,
+		const string &errorMessage, ev_tstamp now)
 	{
-		if (now == 0) {
-			now = SystemTime::getUsec();
-		}
-
-		boost::lock_guard<boost::mutex> l(syncher);
 		nRejected++;
 		nActiveRequests--;
 		bytesRejected += uploadSize;
-		lastRequestEndTime = lastRejectionErrorTime = now;
+		lastRequestEndTime = now;
+		lastRejectionErrorTime = now;
 		lastRejectionErrorMessage = errorMessage;
+		lastLivelinessOkTime = now;
 
-		avgUploadTime = exponentialMovingAverage(avgUploadTime, uploadTime, 0.5);
-		avgUploadSpeed = exponentialMovingAverage(avgUploadSpeed,
+		avgUploadTime = expMovingAverage(avgUploadTime, uploadTime, 0.5);
+		avgUploadSpeed = expMovingAverage(avgUploadSpeed,
 			uploadSize / uploadTime, 0.5);
-		bandwidthUsage.update(uploadSize / uploadTime, now);
+		bandwidthUsage.update(uploadSize / uploadTime, now * 1000000);
 	}
 
-	void reportRequestDropped(size_t uploadSize, const string &errorMessage) {
-		boost::lock_guard<boost::mutex> l(syncher);
+	void reportRequestDropped(size_t uploadSize, ev_tstamp now,
+		const string &errorMessage)
+	{
 		up = false;
 		nDropped++;
 		nActiveRequests--;
 		bytesDropped += uploadSize;
-		lastRequestEndTime = lastDropErrorTime = SystemTime::getUsec();
+		lastRequestEndTime = now;
+		lastDropErrorTime = now;
 		lastDropErrorMessage = errorMessage;
 	}
 
-	Json::Value inspectStateAsJson() const {
+	void reportLivelinessCheckBegin(ev_tstamp now) {
+		assert(!checkingLiveliness);
+		checkingLiveliness = true;
+		lastLivelinessCheckEndTime = now;
+	}
+
+	void reportLivelinessCheckSuccess(ev_tstamp now) {
+		assert(checkingLiveliness);
+		checkingLiveliness = false;
+		up = true;
+		lastLivelinessCheckEndTime = now;
+		lastLivelinessOkTime = now;
+	}
+
+	void reportLivelinessCheckError(ev_tstamp now, const string &errorMessage) {
+		assert(checkingLiveliness);
+		checkingLiveliness = false;
+		lastLivelinessCheckEndTime = now;
+		lastLivelinessCheckErrorTime = now;
+		lastLivelinessCheckErrorMessage = errorMessage;
+	}
+
+	Json::Value inspectStateAsJson(ev_tstamp evNow, unsigned long long now) const {
 		Json::Value doc;
-		boost::lock_guard<boost::mutex> l(syncher);
 
 		doc["number"] = number;
-		doc["ping_url"] = pingURL;
-		doc["sink_url"] = sinkURL;
+		doc["base_url"] = baseUrl;
+		doc["ping_url"] = pingUrl;
+		doc["sink_url"] = sinkUrlWithoutCompression;
 		doc["weight"] = weight;
 		doc["sent"] = byteSizeAndCountToJson(bytesSent, nSent);
 		doc["accepted"] = byteSizeAndCountToJson(bytesAccepted, nAccepted);
@@ -220,14 +265,31 @@ public:
 			avgServerProcessingTime);
 		doc["bandwidth_usage"] = inspectBandwidthUsageAsJson();
 		doc["up"] = up;
+		doc["checking_liveliness"] = checkingLiveliness;
+		doc["next_liveliness_check_time"] = evTimeToJson(
+			getNextLivelinessCheckTime(evNow), evNow, now);
+		doc["liveliness_check_period"] = durationToJson(livelinessCheckPeriod * 1000000ull);
+		doc["last_liveliness_check_initiate_time"] = evTimeToJson(lastLivelinessCheckInitiateTime,
+			evNow, now);
+		doc["last_liveliness_check_end_time"] = evTimeToJson(lastLivelinessCheckEndTime,
+			evNow, now);
+		doc["last_liveliness_ok_time"] = evTimeToJson(lastLivelinessOkTime,
+			evNow, now);
 
 		if (!lastRejectionErrorMessage.empty()) {
-			doc["last_rejection_error"] = timeToJson(lastRejectionErrorTime);
+			doc["last_rejection_error"] = evTimeToJson(lastRejectionErrorTime,
+				evNow, now);
 			doc["last_rejection_error"]["message"] = lastRejectionErrorMessage;
 		}
 		if (!lastDropErrorMessage.empty()) {
-			doc["last_drop_error"] = timeToJson(lastDropErrorTime);
+			doc["last_drop_error"] = evTimeToJson(lastDropErrorTime,
+				evNow, now);
 			doc["last_drop_error"]["message"] = lastDropErrorMessage;
+		}
+		if (!lastLivelinessCheckErrorMessage.empty()) {
+			doc["last_liveliness_check_error"] = evTimeToJson(lastLivelinessCheckErrorTime,
+				evNow, now);
+			doc["last_liveliness_check_error"]["message"] = lastLivelinessCheckErrorMessage;
 		}
 
 		return doc;

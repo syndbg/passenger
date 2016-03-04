@@ -24,39 +24,39 @@ namespace tut {
 			mediumBody = P_STATIC_STRING("23456");
 			largeBody = P_STATIC_STRING("2345678");
 
-			smallTxn = new Transaction("txnId1", "groupName1", "nodeName1", "category1",
+			smallTxn = new Transaction("txnId1", "nodeName1", "category1",
 				"unionStationKey1", 1, "filters1");
 			smallTxn->append(smallBody);
 
-			smallTxn2 = new Transaction("txnId2", "groupName2", "nodeName2", "category2",
+			smallTxn2 = new Transaction("txnId2", "nodeName2", "category2",
 				"unionStationKey2", 2, "filters2");
 			smallTxn2->append(smallBody);
 
-			smallTxn3 = new Transaction("txnId3", "groupName3", "nodeName3", "category3",
+			smallTxn3 = new Transaction("txnId3", "nodeName3", "category3",
 				"unionStationKey3", 3, "filters3");
 			smallTxn3->append(smallBody);
 
-			mediumTxn = new Transaction("txnId1", "groupName1", "nodeName1", "category1",
+			mediumTxn = new Transaction("txnId1", "nodeName1", "category1",
 				"unionStationKey1", 1, "filters1");
 			mediumTxn->append(mediumBody);
 
-			mediumTxn2 = new Transaction("txnId2", "groupName2", "nodeName2", "category2",
+			mediumTxn2 = new Transaction("txnId2", "nodeName2", "category2",
 				"unionStationKey2", 2, "filters2");
 			mediumTxn2->append(mediumBody);
 
-			mediumTxn3 = new Transaction("txnId3", "groupName3", "nodeName3", "category3",
+			mediumTxn3 = new Transaction("txnId3", "nodeName3", "category3",
 				"unionStationKey3", 3, "filters3");
 			mediumTxn3->append(mediumBody);
 
-			largeTxn = new Transaction("txnId1", "groupName1", "nodeName1", "category1",
+			largeTxn = new Transaction("txnId1", "nodeName1", "category1",
 				"unionStationKey1", 1, "filters1");
 			largeTxn->append(largeBody);
 
-			largeTxn2 = new Transaction("txnId2", "groupName2", "nodeName2", "category2",
+			largeTxn2 = new Transaction("txnId2", "nodeName2", "category2",
 				"unionStationKey2", 2, "filters2");
 			largeTxn2->append(largeBody);
 
-			largeTxn3 = new Transaction("txnId3", "groupName3", "nodeName3", "category3",
+			largeTxn3 = new Transaction("txnId3", "nodeName3", "category3",
 				"unionStationKey3", 3, "filters3");
 			largeTxn3->append(largeBody);
 		}

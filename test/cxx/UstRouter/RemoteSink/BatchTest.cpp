@@ -1,5 +1,6 @@
 #include "TestSupport.h"
 #include <zlib.h>
+#include <MessageReadersWriters.h>
 #include <UstRouter/RemoteSink/Batch.h>
 
 using namespace Passenger;
@@ -15,9 +16,9 @@ namespace tut {
 		StaticString bodyBinarySize, bodyBinarySize2;
 
 		UstRouter_RemoteSink_BatchTest() {
-			txn = new Transaction("txnId", "groupName", "nodeName", "category",
+			txn = new Transaction("txnId", "nodeName", "category",
 				"unionStationKey", 1234, "filters");
-			txn2 = new Transaction("txnId2", "groupName2", "nodeName2", "category2",
+			txn2 = new Transaction("txnId2", "nodeName2", "category2",
 				"unionStationKey2", 4321, "filters2");
 			STAILQ_NEXT(txn, nextInBatch) = txn2;
 
@@ -95,6 +96,10 @@ namespace tut {
 			const char *pos = data.data();
 			const char *end = data.data() + data.size();
 
+			StaticString expectedHeader = P_STATIC_STRING(
+				"{\"client_software\": \"" PROGRAM_NAME "\","
+				"\"client_software_version\": \"" PASSENGER_VERSION "\"}");
+
 			////// Preamble
 
 			// Magic
@@ -110,6 +115,18 @@ namespace tut {
 			ensure_equals("(Preamble 3)", StaticString(pos, sizeof(boost::uint8_t)),
 				P_STATIC_STRING("\0"));
 			pos += sizeof(boost::uint8_t);
+
+			// Header size
+			char expectedHeaderBinarySize[sizeof(boost::uint32_t)];
+			Uint32Message::generate(expectedHeaderBinarySize, expectedHeader.size());
+			ensure_equals("(Preamble 4)", StaticString(pos, sizeof(boost::uint32_t)),
+				StaticString(expectedHeaderBinarySize, sizeof(expectedHeaderBinarySize)));
+			pos += sizeof(boost::uint32_t);
+
+			// Header
+			ensure_equals("(Preamble 5)", StaticString(pos, expectedHeader.size()),
+				expectedHeader);
+			pos += expectedHeader.size();
 
 			ensure("(Preamble: size check)", pos <= end);
 

@@ -409,13 +409,16 @@ long atol(const string &s);
 
 /**
  * Round `number` up to the nearest multiple of `multiple`.
- * This only works for integers!
+ * This only works for integers! Use `roundUpD()` for floating point
+ * numbers.
  */
 template<typename IntegerType>
 IntegerType
 roundUp(IntegerType number, IntegerType multiple) {
 	return (number + multiple - 1) / multiple * multiple;
 }
+
+double roundUpD(double number, unsigned int multiple);
 
 /**
  * Converts the given character array to lowercase.

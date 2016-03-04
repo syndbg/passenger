@@ -494,6 +494,17 @@ atol(const string &s) {
 	return ::atol(s.c_str());
 }
 
+double
+roundUpD(double number, unsigned int multiple) {
+	assert(multiple != 0);
+	double remainder = fmod(number, (double) multiple);
+	if (remainder == 0) {
+		return number;
+	} else {
+		return number - remainder + multiple;
+	}
+}
+
 #if !defined(__x86_64__) && !defined(__x86__)
 	// x86 and x86_64 optimized version is implemented in StrIntUtilsNoStrictAliasing.cpp.
 	void
