@@ -35,7 +35,7 @@ namespace tut {
 			  context(bg.safe->getLoop())
 		{
 			sender = NULL;
-			segment = boost::make_shared<Segment>(1, "segment1");
+			segment.reset(new Segment(1, "segment1"));
 			STAILQ_INIT(&segments);
 			STAILQ_INSERT_TAIL(&segments, segment.get(), nextScheduledForSending);
 
@@ -80,7 +80,7 @@ namespace tut {
 		init();
 		createBatch();
 		createBatch();
-		sender->schedule(&segments);
+		sender->schedule(segments);
 
 		Json::Value doc = sender->inspectStateAsJson();
 		ensure_equals("(1)", doc["transfers"]["count"].asUInt(), 1u);

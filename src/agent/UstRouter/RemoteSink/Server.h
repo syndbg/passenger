@@ -195,8 +195,8 @@ public:
 		bandwidthUsage.update(uploadSize / uploadTime, now * 1000000);
 	}
 
-	void reportRequestRejected(size_t uploadSize, ev_tstamp uploadTime,
-		const string &errorMessage, ev_tstamp now)
+	void reportRequestRejected(size_t uploadSize, ev_tstamp now, ev_tstamp uploadTime,
+		const string &errorMessage)
 	{
 		nRejected++;
 		nActiveRequests--;

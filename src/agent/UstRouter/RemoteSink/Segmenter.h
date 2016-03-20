@@ -368,7 +368,7 @@ private:
 		Segment::SmallServerList::const_iterator it, end = segment->servers.end();
 
 		segment->balancingList.clear();
-		segment->nextServerNumber = 0;
+		segment->nextBalancingIndex = 0;
 
 		for (it = segment->servers.begin(); it != end; it++) {
 			const ServerPtr &server = *it;

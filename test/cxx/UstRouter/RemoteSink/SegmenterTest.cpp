@@ -900,7 +900,7 @@ namespace tut {
 
 		Segment *segment = segmenter->getSegment(1);
 		ensure_equals("(8)", segment->balancingList.size(), 3u);
-		ensure_equals("(9)", segment->nextServerNumber, 0u);
+		ensure_equals("(9)", segment->nextBalancingIndex, 0u);
 	}
 
 	TEST_METHOD(62) {
@@ -1446,7 +1446,7 @@ namespace tut {
 			segment1->balancingList.size(), 1u);
 		ensure_equals("New segment's balancing list is updated",
 			segment2->balancingList.size(), 1u);
-		ensure_equals("(6)", segment2->nextServerNumber, 0u);
+		ensure_equals("(6)", segment2->nextBalancingIndex, 0u);
 	}
 
 	TEST_METHOD(103) {
@@ -1510,7 +1510,7 @@ namespace tut {
 
 		Segment *segment = segmenter->getSegment(2);
 		ensure_equals("(9)", segment->balancingList.size(), 3u);
-		ensure_equals("(10)", segment->nextServerNumber, 0u);
+		ensure_equals("(10)", segment->nextBalancingIndex, 0u);
 	}
 
 	TEST_METHOD(105) {
@@ -1536,7 +1536,7 @@ namespace tut {
 
 		Segment *segment = segmenter->getSegment(2);
 		ensure_equals("(1)", segment->balancingList.size(), 3u);
-		ensure_equals("(2)", segment->nextServerNumber, 0u);
+		ensure_equals("(2)", segment->nextBalancingIndex, 0u);
 	}
 
 	TEST_METHOD(106) {

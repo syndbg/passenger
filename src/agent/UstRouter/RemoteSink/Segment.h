@@ -111,7 +111,7 @@ struct Segment: private boost::noncopyable {
 	/****** Fields used by Segmenter and Sender *******/
 
 	SmallServerList balancingList;
-	unsigned int nextServerNumber;
+	unsigned int nextBalancingIndex;
 
 
 	/****** Fields used by Sender *******/
@@ -153,7 +153,7 @@ struct Segment: private boost::noncopyable {
 		  avgBatchingSpeed(-1),
 		  avgCompressionFactor(-1),
 		  processorThread(NULL),
-		  nextServerNumber(0),
+		  nextBalancingIndex(0),
 		  bytesAccepted(0),
 		  bytesRejected(0),
 		  bytesDroppedBySender(0),

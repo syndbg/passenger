@@ -203,6 +203,11 @@ private:
 	}
 
 public:
+	Batch()
+		: uncompressedSize(0),
+		  compressionLevel(Z_DEFAULT_COMPRESSION)
+		{ }
+
 	Batch(Transaction *firstTxnInBatch, int _compressionLevel = Z_DEFAULT_COMPRESSION)
 		: compressionLevel(_compressionLevel)
 	{
@@ -217,7 +222,8 @@ public:
 	Batch(BOOST_RV_REF(Batch) other)
 		: uncompressedSize(other.uncompressedSize),
 		  compressionLevel(other.compressionLevel),
-		  data(boost::move(other.data))
+		  data(boost::move(other.data)),
+		  keys(boost::move(other.keys))
 	{
 		other.uncompressedSize = 0;
 		other.compressionLevel = Z_DEFAULT_COMPRESSION;
@@ -228,6 +234,7 @@ public:
 			uncompressedSize = other.uncompressedSize;
 			compressionLevel = other.compressionLevel;
 			data = boost::move(other.data);
+			keys = boost::move(other.keys);
 			other.uncompressedSize = 0;
 			other.compressionLevel = Z_DEFAULT_COMPRESSION;
 		}

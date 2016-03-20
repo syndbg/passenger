@@ -81,6 +81,7 @@ private:
 		SegmentPtr segment;
 		Batch batch;
 		ServerPtr server;
+		TransferState state;
 		ev_tstamp lastActivity, startTime, uploadBeginTime, uploadEndTime;
 		off_t alreadyUploaded;
 		STAILQ_ENTRY(Transfer) next;
@@ -122,13 +123,18 @@ private:
 	size_t bytesDropped;
 	size_t peakSize;
 	unsigned int nTransfers;
+	unsigned int nFreeTransfers;
 	unsigned int nDropped;
 	unsigned int nPeakTransferring;
-	unsigned int nTransfers;
+	unsigned int nextTransferNumber;
 	ev_tstamp lastInitiateTime, lastAcceptTime, lastRejectTime, lastDropTime;
 	unsigned int connectTimeout, uploadTimeout, responseTimeout;
 	string lastRejectionErrorMessage, lastDropErrorMessage;
 
+
+	struct ev_loop *getLoop() const {
+		return context->loop;
+	}
 
 	bool initiateTransfer(Segment *segment, BOOST_RV_REF(Batch) batch) {
 		ServerPtr server(checkoutNextServer(segment));
@@ -183,7 +189,7 @@ private:
 		CURLMcode ret = curl_multi_add_handle(context->curlMulti, curl);
 		if (ret != CURLM_OK) {
 			P_ERROR("[RemoteSink sender] Error initiating transfer to gateway"
-				transfer->server->getSinkUrlWithoutCompression() << ": " <<
+				<< transfer->server->getSinkUrlWithoutCompression() << ": " <<
 				curl_multi_strerror(ret) << " (code=" << ret << ")");
 			lastDropTime = ev_now(getLoop());
 			lastDropErrorMessage = string("Error initiating transfer to gateway")
@@ -205,6 +211,8 @@ private:
 	Transfer *checkoutTransferObject(Segment *segment, BOOST_RV_REF(Batch) batch,
 		BOOST_RV_REF(ServerPtr) server)
 	{
+		Transfer *transfer;
+
 		if (STAILQ_EMPTY(&freeTransfers)) {
 			try {
 				transfer = new Transfer(this);
@@ -225,7 +233,7 @@ private:
 			}
 		} else {
 			transfer = STAILQ_FIRST(&freeTransfers);
-			STAILQ_REMOVE_HEAD(&freeTransfers, Transaction, next);
+			STAILQ_REMOVE_HEAD(&freeTransfers, next);
 			nFreeTransfers--;
 		}
 
@@ -266,8 +274,8 @@ private:
 		size_t size = segment->balancingList.size();
 
 		for (i = 0; i < size; i++) {
-			unsigned int index = (segment->nextServer + 1) % size;
-			segment->nextServer = index;
+			unsigned int index = (segment->nextBalancingIndex + 1) % size;
+			segment->nextBalancingIndex = index;
 			if (segment->balancingList[i]->isUp()) {
 				return segment->balancingList[i];
 			}
@@ -280,7 +288,8 @@ private:
 	static size_t readTransferData(char *buffer, size_t size, size_t nitems, void *instream) {
 		TRACE_POINT();
 		Transfer *transfer = static_cast<Transfer *>(instream);
-		StaticString data(transfer->batch.getData().substr(transfer->alreadyUploaded, size * n));
+		StaticString data(transfer->batch.getData().substr(transfer->alreadyUploaded,
+			size * nitems));
 		memcpy(buffer, data.data(), data.size());
 		transfer->alreadyUploaded += data.size();
 		return data.size();
@@ -354,7 +363,7 @@ private:
 		processFinishedTransfer(transfer, code, httpCode,
 			transfer->responseData, transfer->errorBuf);
 
-		STAILQ_REMOVE(&activeTransfers, transfer, Transfer, next);
+		STAILQ_REMOVE(&transfers, transfer, Transfer, next);
 		bytesTransferring -= transfer->batch.getDataSize();
 		nTransfers--;
 		freeTransferObject(transfer);
@@ -377,7 +386,7 @@ private:
 			return;
 		}
 		if (OXT_UNLIKELY(!validateResponse(doc))) {
-			handleResponseInvalid(transfer, httpCode, doc);
+			handleResponseInvalid(transfer, httpCode, body);
 			return;
 		}
 		if (OXT_UNLIKELY(doc["status"].asString() != "ok")) {
@@ -428,41 +437,43 @@ private:
 	}
 
 	void handleResponseParseError(Transfer *transfer, long httpCode,
-		const string &parseErrorMessage)
+		const string &body, const string &parseErrorMessage)
 	{
 		// This is probably a bug in the server, so we treat the server
 		// as down until it is fixed.
-		handleServerDown("Could not send data to the Union Station gateway server "
+		handleServerDown(transfer,
+			"Could not send data to the Union Station gateway server "
 			+ transfer->server->getSinkUrlWithoutCompression()
 			+ ". It returned an invalid response (unparseable)."
 			+ " Parse error: " + parseErrorMessage
 			+ "; keys: " + toString(transfer->batch.getKeys())
 			+ "; HTTP code: " + toString(httpCode)
-			+ "; body: \"" + cEscapeString(transfer->responseData) + "\"",
+			+ "; body: \"" + cEscapeString(body) + "\"",
 
 			"The server returned an invalid response (unparseable)."
-			+ " Parse error: " + parseErrorMessage
+			" Parse error: " + parseErrorMessage
 			+ "; keys: " + toString(transfer->batch.getKeys())
 			+ "; HTTP code: " + toString(httpCode)
-			+ "; body: \"" + cEscapeString(transfer->responseData) + "\"");
+			+ "; body: \"" + cEscapeString(body) + "\"");
 	}
 
-	void handleResponseInvalid(Transfer *transfer, long httpCode) {
+	void handleResponseInvalid(Transfer *transfer, long httpCode, const string &body) {
 		// This is probably a bug in the server, so we treat the server
 		// as down until it is fixed.
-		handleServerDown("Could not send data to the Union Station gateway server "
+		handleServerDown(transfer,
+			"Could not send data to the Union Station gateway server "
 			+ transfer->server->getSinkUrlWithoutCompression()
 			+ ". It returned an invalid response (parseable,"
 			" but does not comply to expected structure)."
 			+ " Keys: " + toString(transfer->batch.getKeys())
 			+ "; HTTP code: " + toString(httpCode)
-			+ "; body: \"" + cEscapeString(transfer->responseData) + "\"",
+			+ "; body: \"" + cEscapeString(body) + "\"",
 
 			"The server returned an invalid response (parseable,"
 			" but does not comply to expected structure)."
-			+ " Keys: " + toString(transfer->batch.getKeys())
+			" Keys: " + toString(transfer->batch.getKeys())
 			+ "; HTTP code: " + toString(httpCode)
-			+ "; body: \"" + cEscapeString(transfer->responseData) + "\"");
+			+ "; body: \"" + cEscapeString(body) + "\"");
 	}
 
 	void handleResponseErrorMessage(Transfer *transfer, const Json::Value &doc) {
@@ -470,8 +481,9 @@ private:
 
 		size_t dataSize = transfer->batch.getDataSize();
 		ev_tstamp now = ev_now(getLoop());
+		ev_tstamp uploadTime = transfer->uploadEndTime - transfer->uploadBeginTime;
 
-		transfer->server->reportRequestRejected(dataSize, now,
+		transfer->server->reportRequestRejected(dataSize, now, uploadTime,
 			"Error message from server: "
 			+ doc["message"].asString()
 			+ "; keys: " + toString(transfer->batch.getKeys()));
@@ -481,33 +493,35 @@ private:
 			+ transfer->server->getSinkUrlWithoutCompression()
 			+ ". It returned the following error message: "
 			+ doc["message"].asString()
-			+ "; keys: " + toString(transfer->batch.getKeys()));
+			+ "; keys: " + toString(transfer->batch.getKeys());
 
 		bytesRejected += dataSize;
 		nRejected++;
 		lastRejectTime = now;
-		segment->bytesRejected += dataSize;
-		segment->nRejected++;
-		segment->lastRejectTime = now;
+		transfer->segment->bytesRejected += dataSize;
+		transfer->segment->nRejected++;
+		transfer->segment->lastRejectTime = now;
 
 		handleResponseKeys(transfer, doc);
 	}
 
-	void handleResponseInvalidHttpCode(Transfer *transfer, long httpCode) {
+	void handleResponseInvalidHttpCode(Transfer *transfer, long httpCode,
+		const string &body)
+	{
 		// This is probably a bug in the server, so we treat the server
 		// as down until it is fixed.
 		handleServerDown(transfer,
 			"Could not send data to the Union Station gateway server "
 			+ transfer->server->getSinkUrlWithoutCompression()
 			+ ". It responded with an invalid HTTP code."
-			+ " Keys: " + toString(transfer->batch.getKeys())
+			" Keys: " + toString(transfer->batch.getKeys())
 			+ "; HTTP code: " + toString(httpCode)
-			+ "; body: \"" + cEscapeString(transfer->responseData) + "\"",
+			+ "; body: \"" + cEscapeString(body) + "\"",
 
 			"Response with invalid HTTP code."
-			+ " Keys: " + toString(transfer->batch.getKeys())
+			" Keys: " + toString(transfer->batch.getKeys())
 			+ "; HTTP code: " + toString(httpCode)
-			+ "; body: \"" + cEscapeString(transfer->responseData) + "\"");
+			+ "; body: \"" + cEscapeString(body) + "\"");
 	}
 
 	void handleSuccessResponse(Transfer *transfer, const Json::Value &doc) {
@@ -522,14 +536,14 @@ private:
 		bytesAccepted += dataSize;
 		nAccepted++;
 		lastAcceptTime = now;
-		segment->bytesAccepted += dataSize;
-		segment->nAccepted++;
-		segment->lastAcceptTime = now;
+		transfer->segment->bytesAccepted += dataSize;
+		transfer->segment->nAccepted++;
+		transfer->segment->lastAcceptTime = now;
 
 		handleResponseKeys(transfer, doc);
 	}
 
-	void handleResponseKeys(Transfer *transfer, cosnt Json::Value &doc) {
+	void handleResponseKeys(Transfer *transfer, const Json::Value &doc) {
 		if (doc.isMember("recheck_balancer_in")) {
 			// TODO
 		}
@@ -541,16 +555,18 @@ private:
 		}
 	}
 
-	void handleTransferPerformError(Segment *segment, const ServerPtr &server, CURLcode code) {
-		handleServerDown(segment,
+	void handleTransferPerformError(Transfer *transfer, CURLcode code,
+		const char *errorBuf)
+	{
+		handleServerDown(transfer,
 			"Could not send data to the Union Station gateway server "
 			+ transfer->server->getSinkUrlWithoutCompression()
 			+ ". It might be down. Keys: " + toString(transfer->batch.getKeys())
-			+ "; error message: " + transfer->errorBuf,
+			+ "; error message: " + errorBuf,
 
 			"Server appears to be down."
-			+ " Keys: " + toString(transfer->batch.getKeys())
-			+ "; error message: " + transfer->errorBuf);
+			" Keys: " + toString(transfer->batch.getKeys())
+			+ "; error message: " + errorBuf);
 	}
 
 	void handleServerDown(Transfer *transfer, const string &globalErrorMessage,
@@ -558,6 +574,7 @@ private:
 	{
 		size_t dataSize = transfer->batch.getDataSize();
 		ev_tstamp now = ev_now(getLoop());
+		Segment *segment = transfer->segment.get();
 
 		transfer->server->reportRequestDropped(dataSize, now,
 			serverSpecificErrorMessage);
@@ -576,7 +593,7 @@ private:
 			P_INFO("[RemoteSink sender] " << globalErrorMessage);
 			P_INFO("[RemoteSink sender] Retrying by sending the data to a different"
 			" gateway server...");
-			if (!initiateTransfer(transfer->segment, boost::move(transfer->batch))) {
+			if (!initiateTransfer(segment, boost::move(transfer->batch))) {
 				assert(!lastDropErrorMessage.empty());
 				P_ASSERT_EQ(lastDropTime, now);
 
@@ -604,7 +621,7 @@ private:
 
 		return result;
 	}
-
+/*
 	Json::Value inspectTransfersAsJson() const {
 		Json::Value doc, subdoc;
 
@@ -664,7 +681,7 @@ private:
 			doc[toString(transfer->number)] = subdoc;
 		}
 	}
-
+*/
 protected:
 	// Only used in unit tests.
 	void transferFinished(unsigned int transferNumber, CURLcode code, long httpCode,
@@ -690,9 +707,10 @@ public:
 		  bytesDropped(0),
 		  peakSize(0),
 		  nTransfers(0),
+		  nFreeTransfers(0),
 		  nDropped(0),
 		  nPeakTransferring(0),
-		  nTransfers(0),
+		  nextTransferNumber(1),
 		  lastInitiateTime(0),
 		  lastAcceptTime(0),
 		  lastRejectTime(0),
@@ -731,6 +749,7 @@ public:
 
 		STAILQ_FOREACH(segment, &segments, nextScheduledForSending) {
 			Segment::BatchList::iterator it, end = segment->incomingBatches.end();
+			char address[sizeof(Segment *)];
 			memcpy(address, &segment, sizeof(Segment *));
 			HashedStaticString addressString(address, sizeof(address));
 
