@@ -61,6 +61,8 @@ TEST_CXX_OBJECTS = {
     "test/cxx/UstRouter/RemoteSink/BatcherTest.cpp",
   "#{TEST_OUTPUT_DIR}cxx/UstRouter/RemoteSink/ServerLivelinessCheckerTest.o" =>
     "test/cxx/UstRouter/RemoteSink/ServerLivelinessCheckerTest.cpp",
+  "#{TEST_OUTPUT_DIR}cxx/UstRouter/RemoteSink/SenderTest.o" =>
+    "test/cxx/UstRouter/RemoteSink/SenderTest.cpp",
 
   "#{TEST_OUTPUT_DIR}cxx/ServerKit/ChannelTest.o" =>
     "test/cxx/ServerKit/ChannelTest.cpp",

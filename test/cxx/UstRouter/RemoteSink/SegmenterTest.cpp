@@ -118,6 +118,11 @@ namespace tut {
 			return bg.safe->getLoop();
 		}
 
+		void mockTime(ev_tstamp t) {
+			mockTime(t);
+			SystemTime::forceAll(t * 1000000ull);
+		}
+
 		Transaction *createTxn(const string &key, bool addToList = true) {
 			Transaction *txn = new Transaction("", "", "", key, 0);
 			txn->append("body");
@@ -286,8 +291,7 @@ namespace tut {
 
 		createTxn("key1");
 		init();
-		ev_set_time(getLoop(), 1);
-		SystemTime::forceAll(1000000);
+		mockTime(1);
 		segmenter->apiLookupResult = false;
 		segmenter->schedule(transactions, totalBodySize, nTransactions, bytesAdded, nAdded);
 
@@ -322,12 +326,10 @@ namespace tut {
 
 		init();
 
-		ev_set_time(getLoop(), 1);
-		SystemTime::forceAll(1000000);
+		mockTime(1);
 		createSegment("segment1", "key1");
 
-		ev_set_time(getLoop(), 11);
-		SystemTime::forceAll(11000000);
+		mockTime(11);
 		createSegment("segment2", "key2");
 
 		Json::Value doc = segmenter->inspectStateAsJson();
@@ -344,17 +346,14 @@ namespace tut {
 
 		init();
 
-		ev_set_time(getLoop(), 1);
-		SystemTime::forceAll(1000000);
+		mockTime(1);
 		createTxn("key1");
 		segmenter->schedule(transactions, totalBodySize, nTransactions, bytesAdded, nAdded);
 
-		ev_set_time(getLoop(), 11);
-		SystemTime::forceAll(11000000);
+		mockTime(11);
 		createSegment("segment1", "key2");
 
-		ev_set_time(getLoop(), 21);
-		SystemTime::forceAll(21000000);
+		mockTime(21);
 		createSegment("segment2", "key3");
 
 		Json::Value doc = segmenter->inspectStateAsJson();
@@ -371,16 +370,14 @@ namespace tut {
 	TEST_METHOD(13) {
 		set_test_name("It stops the timer if all key infos are busy with API lookups");
 
-		ev_set_time(getLoop(), 0);
-		SystemTime::forceAll(0);
+		mockTime(0);
 		init();
 		createSegment("segment1", "key1");
 		createSegment("segment2", "key2");
 		Json::Value doc = segmenter->inspectStateAsJson();
 		ensure("(1)", !doc["next_key_refresh_time"].isNull());
 
-		ev_set_time(getLoop(), 9999);
-		SystemTime::forceAll(9999000000ull);
+		mockTime(9999);
 		segmenter->triggerTimeout();
 		doc = segmenter->inspectStateAsJson();
 		ensure("(2)", doc["next_key_refresh_time"].isNull());
@@ -394,20 +391,16 @@ namespace tut {
 
 		init();
 
-		ev_set_time(getLoop(), 1);
-		SystemTime::forceAll(1000000);
+		mockTime(1);
 		createSegment("segment1", "key1");
 
-		ev_set_time(getLoop(), 11);
-		SystemTime::forceAll(11000000);
+		mockTime(11);
 		createSegment("segment2", "key2");
 
-		ev_set_time(getLoop(), 21);
-		SystemTime::forceAll(21000000);
+		mockTime(21);
 		createSegment("segment3", "key3");
 
-		ev_set_time(getLoop(), 11 + Segmenter::DEFAULT_KEY_INFO_REFRESH_TIME_WHEN_ALL_HEALTHY);
-		SystemTime::forceAll((11 + Segmenter::DEFAULT_KEY_INFO_REFRESH_TIME_WHEN_ALL_HEALTHY) * 1000000);
+		mockTime(11 + Segmenter::DEFAULT_KEY_INFO_REFRESH_TIME_WHEN_ALL_HEALTHY);
 		segmenter->triggerTimeout();
 		Json::Value doc = segmenter->inspectStateAsJson();
 		ensure("(1)", doc["keys"]["key1"]["looking_up"].asBool());
@@ -419,12 +412,10 @@ namespace tut {
 		set_test_name("It reschedules an API lookup for a later time if initiating the lookup failed");
 
 		init();
-		ev_set_time(getLoop(), 1);
-		SystemTime::forceAll(1000000);
+		mockTime(1);
 		createSegment("segment1", "key1");
 
-		ev_set_time(getLoop(), 11 + Segmenter::DEFAULT_KEY_INFO_REFRESH_TIME_WHEN_ALL_HEALTHY);
-		SystemTime::forceAll((11 + Segmenter::DEFAULT_KEY_INFO_REFRESH_TIME_WHEN_ALL_HEALTHY) * 1000000);
+		mockTime(11 + Segmenter::DEFAULT_KEY_INFO_REFRESH_TIME_WHEN_ALL_HEALTHY);
 
 		segmenter->apiLookupResult = false;
 		segmenter->triggerTimeout();
@@ -477,8 +468,7 @@ namespace tut {
 		set_test_name("If CURL returned with an error then it schedules a refresh"
 			" in the near future according to a default 'has_errors' timeout");
 
-		ev_set_time(getLoop(), 1);
-		SystemTime::forceAll(1000000);
+		mockTime(1);
 		init();
 		createTxn("key1");
 		segmenter->schedule(transactions, totalBodySize, nTransactions, bytesAdded, nAdded);
@@ -532,8 +522,7 @@ namespace tut {
 		set_test_name("If the response is gibberish then it schedules a refresh in the"
 			" near future according to a default 'has_errors' timeout");
 
-		ev_set_time(getLoop(), 1);
-		SystemTime::forceAll(1000000);
+		mockTime(1);
 		init();
 		createTxn("key1");
 		segmenter->schedule(transactions, totalBodySize, nTransactions, bytesAdded, nAdded);
@@ -587,8 +576,7 @@ namespace tut {
 		set_test_name("If the response is parseable but not valid then it schedules a refresh"
 			" in the near future according to a default 'has_errors' timeout");
 
-		ev_set_time(getLoop(), 1);
-		SystemTime::forceAll(1000000);
+		mockTime(1);
 		init();
 		createTxn("key1");
 		segmenter->schedule(transactions, totalBodySize, nTransactions, bytesAdded, nAdded);
@@ -657,8 +645,7 @@ namespace tut {
 		doc["message"] = "oh no";
 		doc["recheck_balancer_in"] = 122;
 
-		ev_set_time(getLoop(), 1);
-		SystemTime::forceAll(1000000);
+		mockTime(1);
 		init();
 		createTxn("key1");
 		createTxn("key2");
@@ -690,8 +677,7 @@ namespace tut {
 		doc["status"] = "error";
 		doc["message"] = "oh no";
 
-		ev_set_time(getLoop(), 1);
-		SystemTime::forceAll(1000000);
+		mockTime(1);
 		init();
 		createTxn("key1");
 		createTxn("key2");
@@ -723,8 +709,7 @@ namespace tut {
 		doc["message"] = "oh no";
 		doc["suspend_sending"] = 123;
 
-		ev_set_time(getLoop(), 1);
-		SystemTime::forceAll(1000000);
+		mockTime(1);
 		init();
 		createTxn("key1");
 		createTxn("key2");
@@ -740,8 +725,7 @@ namespace tut {
 		nTransactions = 0;
 		totalBodySize = 0;
 		createTxn("key1");
-		ev_set_time(getLoop(), 2);
-		SystemTime::forceAll(2000000);
+		mockTime(2);
 		segmenter->schedule(transactions, totalBodySize, nTransactions, bytesAdded, nAdded);
 		ensure_equals("(2)", bytesAdded, 0u);
 		ensure_equals("(3)", nAdded, 0u);
@@ -749,8 +733,7 @@ namespace tut {
 		nTransactions = 0;
 		totalBodySize = 0;
 		createTxn("key1");
-		ev_set_time(getLoop(), 125);
-		SystemTime::forceAll(125000000);
+		mockTime(125);
 		segmenter->schedule(transactions, totalBodySize, nTransactions, bytesAdded, nAdded);
 		ensure_equals("(4)", bytesAdded, totalBodySize);
 		ensure_equals("(5)", nAdded, 1u);
@@ -819,8 +802,7 @@ namespace tut {
 		doc["targets"][1]["base_url"] = "http://server2";
 		doc["targets"][1]["weight"] = 2;
 
-		ev_set_time(getLoop(), 1);
-		SystemTime::forceAll(1000000);
+		mockTime(1);
 		init();
 		createTxn("key1");
 		createTxn("key2");
@@ -956,8 +938,7 @@ namespace tut {
 		doc["targets"][1]["base_url"] = "http://server2";
 		doc["targets"][1]["weight"] = 2;
 
-		ev_set_time(getLoop(), 1);
-		SystemTime::forceAll(1000000);
+		mockTime(1);
 		init();
 		createTxn("key1");
 		segmenter->schedule(transactions, totalBodySize, nTransactions, bytesAdded, nAdded);
@@ -990,8 +971,7 @@ namespace tut {
 		doc["targets"][1]["base_url"] = "http://server2";
 		doc["targets"][1]["weight"] = 2;
 
-		ev_set_time(getLoop(), 1);
-		SystemTime::forceAll(1000000);
+		mockTime(1);
 		init();
 		createTxn("key1");
 		segmenter->schedule(transactions, totalBodySize, nTransactions, bytesAdded, nAdded);
@@ -1049,13 +1029,11 @@ namespace tut {
 		set_test_name("If CURL returned with an error then it schedules a refresh in"
 			" the near future according to the last 'has_errors' timeout");
 
-		ev_set_time(getLoop(), 1);
-		SystemTime::forceAll(1000000);
+		mockTime(1);
 		init();
 		createSegment("segment1", "key1");
 
-		ev_set_time(getLoop(), 2);
-		SystemTime::forceAll(2000000);
+		mockTime(2);
 		segmenter->refreshKey("key1");
 		createTxn("key2");
 		segmenter->schedule(transactions, totalBodySize, nTransactions, bytesAdded, nAdded);
@@ -1110,13 +1088,11 @@ namespace tut {
 		set_test_name("If the response is gibberish then it schedules a refresh in the near future"
 			" according to the last 'has_errors' timeout");
 
-		ev_set_time(getLoop(), 1);
-		SystemTime::forceAll(1000000);
+		mockTime(1);
 		init();
 		createSegment("segment1", "key1");
 
-		ev_set_time(getLoop(), 2);
-		SystemTime::forceAll(2000000);
+		mockTime(2);
 		segmenter->refreshKey("key1");
 		createTxn("key2");
 		segmenter->schedule(transactions, totalBodySize, nTransactions, bytesAdded, nAdded);
@@ -1170,13 +1146,11 @@ namespace tut {
 		set_test_name("If the response is parseable but not valid then it schedules a refresh"
 			" in the near future according to the last 'has_errors' timeout");
 
-		ev_set_time(getLoop(), 1);
-		SystemTime::forceAll(1000000);
+		mockTime(1);
 		init();
 		createSegment("segment1", "key1");
 
-		ev_set_time(getLoop(), 2);
-		SystemTime::forceAll(2000000);
+		mockTime(2);
 		segmenter->refreshKey("key1");
 		setLogLevel(LVL_CRIT);
 		segmenter->apiLookupFinished("key1", 0, CURLE_OK, 200, "{}", NULL);
@@ -1241,14 +1215,12 @@ namespace tut {
 		doc["message"] = "oh no";
 		doc["recheck_balancer_in"] = 121;
 
-		ev_set_time(getLoop(), 1);
-		SystemTime::forceAll(1000000);
+		mockTime(1);
 		init();
 		createSegment("segment1", "key1");
 		segmenter->refreshKey("key1");
 
-		ev_set_time(getLoop(), 2);
-		SystemTime::forceAll(2000000);
+		mockTime(2);
 		setLogLevel(LVL_CRIT);
 		segmenter->apiLookupFinished("key1", 0, CURLE_OK, 200, doc.toStyledString(), NULL);
 
@@ -1275,14 +1247,12 @@ namespace tut {
 		doc["status"] = "error";
 		doc["message"] = "oh no";
 
-		ev_set_time(getLoop(), 1);
-		SystemTime::forceAll(1000000);
+		mockTime(1);
 		init();
 		createSegment("segment1", "key1");
 		segmenter->refreshKey("key1");
 
-		ev_set_time(getLoop(), 2);
-		SystemTime::forceAll(2000000);
+		mockTime(2);
 		setLogLevel(LVL_CRIT);
 		segmenter->apiLookupFinished("key1", 0, CURLE_OK, 200, doc.toStyledString(), NULL);
 
@@ -1310,14 +1280,12 @@ namespace tut {
 		doc["message"] = "oh no";
 		doc["suspend_sending"] = 123;
 
-		ev_set_time(getLoop(), 1);
-		SystemTime::forceAll(1000000);
+		mockTime(1);
 		init();
 		createSegment("segment1", "key1");
 		segmenter->refreshKey("key1");
 
-		ev_set_time(getLoop(), 2);
-		SystemTime::forceAll(2000000);
+		mockTime(2);
 		setLogLevel(LVL_CRIT);
 		segmenter->apiLookupFinished("key1", 0, CURLE_OK, 200, doc.toStyledString(), NULL);
 
@@ -1329,8 +1297,7 @@ namespace tut {
 		nTransactions = 0;
 		totalBodySize = 0;
 		createTxn("key1");
-		ev_set_time(getLoop(), 3);
-		SystemTime::forceAll(3000000);
+		mockTime(3);
 		segmenter->schedule(transactions, totalBodySize, nTransactions, bytesAdded, nAdded);
 		ensure_equals("(2)", bytesAdded, 0u);
 		ensure_equals("(3)", nAdded, 0u);
@@ -1338,8 +1305,7 @@ namespace tut {
 		nTransactions = 0;
 		totalBodySize = 0;
 		createTxn("key1");
-		ev_set_time(getLoop(), 126);
-		SystemTime::forceAll(126000000);
+		mockTime(126);
 		segmenter->schedule(transactions, totalBodySize, nTransactions, bytesAdded, nAdded);
 		ensure_equals("(4)", bytesAdded, totalBodySize);
 		ensure_equals("(5)", nAdded, 1u);
@@ -1409,13 +1375,11 @@ namespace tut {
 		doc["targets"][1]["base_url"] = "http://server2";
 		doc["targets"][1]["weight"] = 2;
 
-		ev_set_time(getLoop(), 1);
-		SystemTime::forceAll(1000000);
+		mockTime(1);
 		init();
 		createSegment("segment1", "key1");
 
-		ev_set_time(getLoop(), 2);
-		SystemTime::forceAll(2000000);
+		mockTime(2);
 		segmenter->refreshKey("key1");
 		setLogLevel(LVL_CRIT);
 		segmenter->apiLookupFinished("key1", 0, CURLE_OK, 500, doc.toStyledString(), NULL);
@@ -1562,13 +1526,11 @@ namespace tut {
 		doc["targets"][1]["base_url"] = "http://server2";
 		doc["targets"][1]["weight"] = 2;
 
-		ev_set_time(getLoop(), 1);
-		SystemTime::forceAll(1000000);
+		mockTime(1);
 		init();
 		createSegment("segment1", "key1");
 
-		ev_set_time(getLoop(), 2);
-		SystemTime::forceAll(2000000);
+		mockTime(2);
 		segmenter->refreshKey("key1");
 		segmenter->apiLookupFinished("key1", 0, CURLE_OK, 200, doc.toStyledString(), NULL);
 
@@ -1590,13 +1552,11 @@ namespace tut {
 		doc["targets"][1]["base_url"] = "http://server2";
 		doc["targets"][1]["weight"] = 2;
 
-		ev_set_time(getLoop(), 1);
-		SystemTime::forceAll(1000000);
+		mockTime(1);
 		init();
 		createSegment("segment1", "key1");
 
-		ev_set_time(getLoop(), 2);
-		SystemTime::forceAll(2000000);
+		mockTime(2);
 		segmenter->refreshKey("key1");
 
 		ensure_equals("(1)", checker.nRegistered, 0u);
@@ -1617,13 +1577,11 @@ namespace tut {
 		doc["targets"][1]["base_url"] = "http://server2";
 		doc["targets"][1]["weight"] = 2;
 
-		ev_set_time(getLoop(), 1);
-		SystemTime::forceAll(1000000);
+		mockTime(1);
 		init();
 		createSegment("segment1", "key1");
 
-		ev_set_time(getLoop(), 2);
-		SystemTime::forceAll(2000000);
+		mockTime(2);
 		segmenter->refreshKey("key1");
 		segmenter->apiLookupFinished("key1", 0, CURLE_OK, 200, doc.toStyledString(), NULL);
 
@@ -1653,13 +1611,11 @@ namespace tut {
 		doc["targets"][1]["base_url"] = "http://server2";
 		doc["targets"][1]["weight"] = 2;
 
-		ev_set_time(getLoop(), 1);
-		SystemTime::forceAll(1000000);
+		mockTime(1);
 		init();
 		createSegment("segment1", "key1");
 
-		ev_set_time(getLoop(), 2);
-		SystemTime::forceAll(2000000);
+		mockTime(2);
 		segmenter->refreshKey("key1");
 		segmenter->apiLookupFinished("key1", 0, CURLE_OK, 200, doc.toStyledString(), NULL);
 
@@ -1684,13 +1640,11 @@ namespace tut {
 		doc["targets"][1]["base_url"] = "http://server2";
 		doc["targets"][1]["weight"] = 2;
 
-		ev_set_time(getLoop(), 1);
-		SystemTime::forceAll(1000000);
+		mockTime(1);
 		init();
 		createSegment("segment1", "key1");
 
-		ev_set_time(getLoop(), 2);
-		SystemTime::forceAll(2000000);
+		mockTime(2);
 		segmenter->refreshKey("key1");
 		segmenter->apiLookupFinished("key1", 0, CURLE_OK, 200, doc.toStyledString(), NULL);
 

@@ -344,7 +344,7 @@ private:
 		}
 	}
 
-	void finishTransfer(TransferInfo *transferInfo, CURLcode code, long httpCode,
+	void finishTransfer(Transfer *transfer, CURLcode code, long httpCode,
 		const string &body, const char *errorBuf)
 	{
 		TRACE_POINT();
@@ -663,6 +663,23 @@ private:
 
 			doc[toString(transfer->number)] = subdoc;
 		}
+	}
+
+protected:
+	// Only used in unit tests.
+	void transferFinished(unsigned int transferNumber, CURLcode code, long httpCode,
+		const string &body, const char *errorBuf)
+	{
+		Transfer *transfer;
+
+		STAILQ_FOREACH(transfer, &transfers, next) {
+			if (transfer->number == transferNumber) {
+				finishTransfer(transfer, code, httpCode, body, errorBuf);
+				return;
+			}
+		}
+
+		throw RuntimeException("Transfer not found");
 	}
 
 public:
