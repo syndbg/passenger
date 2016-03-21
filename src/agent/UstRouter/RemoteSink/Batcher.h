@@ -667,7 +667,10 @@ public:
 			} else {
 				doc["state"] = "SHUTTING_DOWN";
 			}
+		} else {
+			doc["state"] = "ACTIVE";
 		}
+
 		doc["last_queue_add_time"] = evTimeToJson(lastQueueAddTime,
 			evNow, now);
 		doc["last_processing_begin_time"] = monoTimeToJson(lastProcessingBeginTime,

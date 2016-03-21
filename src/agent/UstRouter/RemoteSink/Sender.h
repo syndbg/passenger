@@ -120,12 +120,17 @@ private:
 	TransferList transfers;
 	TransferList freeTransfers;
 	size_t bytesTransferring;
+	size_t bytesAccepted;
+	size_t bytesRejected;
 	size_t bytesDropped;
 	size_t peakSize;
+	size_t limit;
 	unsigned int nTransfers;
 	unsigned int nFreeTransfers;
-	unsigned int nDropped;
 	unsigned int nPeakTransferring;
+	unsigned int nAccepted;
+	unsigned int nRejected;
+	unsigned int nDropped;
 	unsigned int nextTransferNumber;
 	ev_tstamp lastInitiateTime, lastAcceptTime, lastRejectTime, lastDropTime;
 	unsigned int connectTimeout, uploadTimeout, responseTimeout;
@@ -621,33 +626,58 @@ private:
 
 		return result;
 	}
-/*
-	Json::Value inspectTransfersAsJson() const {
-		Json::Value doc, subdoc;
 
-		subdoc = byteSizeAndCountToJson(bytesWaitingForServerDefinition,
-			nWaitingForServerDefintion);
-		inspectTransferListAsJson(&transfersWaitingForServerDefinition, subdoc);
-		doc["waiting_for_server_definition"] = subdoc;
+	Json::Value inspectTransfersAsJson(ev_tstamp evNow, unsigned long long now) const {
+		Json::Value doc;
 
-		subdoc = byteSizeAndCountToJson(bytesInNotYetActiveTransfers,
-			nNotYetActiveTransfers);
-		inspectTransferListAsJson(&notYetActiveTransfers, subdoc);
-		doc["not_yet_active"] = subdoc;
-
-		subdoc = byteSizeAndCountToJson(bytesInActiveTransfers, nActiveTransfers);
-		subdoc["peak_count"] = nPeakActiveTransfers;
-		inspectTransferListAsJson(&activeTransfers, subdoc);
-		doc["active"] = subdoc;
-
-		subdoc = Json::Value();
-		subdoc["count"] = nFreeTransfers;
-		doc["freelist"] = subdoc;
+		doc["count"] = nTransfers;
+		doc["peak_count"] = nPeakTransferring;
+		doc["freelist_count"] = nFreeTransfers;
+		doc["items"] = inspectTransferItemsAsJson(evNow, now);
 
 		return doc;
 	}
 
-	void inspectTransferListAsJson(Json::Value &doc, TransferList &transfers) const {
+	Json::Value inspectTransferItemsAsJson(ev_tstamp evNow, unsigned long long now) const {
+		Json::Value doc(Json::objectValue);
+		Transfer *transfer;
+
+		STAILQ_FOREACH(transfer, &transfers, next) {
+			Json::Value item;
+
+			doc["segment_number"] = transfer->segment->number;
+			doc["server_number"] = transfer->server->getNumber();
+			doc["server_sink_url"] = transfer->server->getSinkUrlWithoutCompression();
+			doc["last_activity"] = evTimeToJson(transfer->lastActivity,
+				evNow, now);
+			doc["start_time"] = evTimeToJson(transfer->startTime, evNow, now);
+			doc["upload_begin_time"] = evTimeToJson(transfer->uploadBeginTime, evNow, now);
+			doc["upload_end_time"] = evTimeToJson(transfer->uploadEndTime, evNow, now);
+			doc["already_uploaded"] = byteSizeToJson(transfer->alreadyUploaded);
+			doc["size"] = byteSizeToJson(transfer->batch.getDataSize());
+
+			switch (transfer->state) {
+			case CONNECTING:
+				doc["state"] = "CONNECTING";
+				break;
+			case UPLOADING:
+				doc["state"] = "UPLOADING";
+				break;
+			case RECEIVING_RESPONSE:
+				doc["state"] = "RECEIVING_RESPONSE";
+				break;
+			default:
+				doc["state"] = "UNKNOWN";
+				break;
+			}
+
+			doc[toString(transfer->number)] = item;
+		}
+
+		return doc;
+	}
+
+/*	void inspectTransferListAsJson(Json::Value &doc, TransferList &transfers) const {
 		Transaction *transaction;
 
 		STAILQ_FOREACH(transfer, &transfers, next) {
@@ -704,20 +734,22 @@ public:
 	Sender(Context *_context, const VariantMap &options)
 		: context(_context),
 		  bytesTransferring(0),
+		  bytesAccepted(0),
+		  bytesRejected(0),
 		  bytesDropped(0),
 		  peakSize(0),
+		  limit(options.getULL("union_station_sender_memory_limit")),
 		  nTransfers(0),
 		  nFreeTransfers(0),
-		  nDropped(0),
 		  nPeakTransferring(0),
+		  nAccepted(0),
+		  nRejected(0),
+		  nDropped(0),
 		  nextTransferNumber(1),
 		  lastInitiateTime(0),
 		  lastAcceptTime(0),
 		  lastRejectTime(0),
 		  lastDropTime(0),
-		  connectTimeout(0),
-		  uploadTimeout(0),
-		  responseTimeout(0),
 		  connectTimeout(options.getUint("union_station_connect_timeout", false, 0)),
 		  uploadTimeout(options.getUint("union_station_upload_timeout")),
 		  responseTimeout(options.getUint("union_station_response_timeout"))
@@ -787,14 +819,24 @@ public:
 	}
 
 	Json::Value inspectStateAsJson() const {
-		Json::Value doc, subdoc;
+		Json::Value doc;
+		ev_tstamp evNow = ev_now(getLoop());
+		unsigned long long now = SystemTime::getUsec();
 
 		doc["total_memory"]["size"] = byteSizeToJson(bytesTransferring);
-		doc["total_memory"]["count"] = totalCount();
+		doc["total_memory"]["count"] = nTransfers;
 		doc["total_memory"]["peak_size"] = byteSizeToJson(peakSize);
 		doc["total_memory"]["limit"] = byteSizeToJson(limit);
-
-		doc["transfers"] = inspectAllTransfersAsJson();
+		doc["transfers"] = inspectTransfersAsJson(evNow, now);
+		doc["accepted"] = byteSizeAndCountToJson(bytesAccepted, nAccepted);
+		doc["rejected"] = byteSizeAndCountToJson(bytesRejected, nRejected);
+		doc["dropped"] = byteSizeAndCountToJson(bytesDropped, nDropped);
+		doc["last_initiated"] = evTimeToJson(lastInitiateTime, evNow, now);
+		doc["last_accepted"] = evTimeToJson(lastAcceptTime, evNow, now);
+		doc["last_rejected"] = errorAndOcurrenceEvTimeToJson(lastRejectionErrorMessage,
+			lastRejectTime, evNow, now);
+		doc["last_dropped"] = errorAndOcurrenceEvTimeToJson(lastDropErrorMessage,
+			lastDropTime, evNow, now);
 
 		return doc;
 	}

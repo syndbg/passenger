@@ -39,6 +39,7 @@ namespace tut {
 			STAILQ_INIT(&segments);
 			STAILQ_INSERT_TAIL(&segments, segment.get(), nextScheduledForSending);
 
+			options.setULL("union_station_sender_memory_limit", 1024);
 			options.setInt("union_station_upload_timeout", 60);
 			options.setInt("union_station_response_timeout", 60);
 		}

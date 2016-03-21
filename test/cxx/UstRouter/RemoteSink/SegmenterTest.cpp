@@ -119,7 +119,7 @@ namespace tut {
 		}
 
 		void mockTime(ev_tstamp t) {
-			mockTime(t);
+			ev_set_time(getLoop(), t);
 			SystemTime::forceAll(t * 1000000ull);
 		}
 
