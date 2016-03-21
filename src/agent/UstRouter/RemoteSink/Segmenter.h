@@ -642,13 +642,13 @@ private:
 		return toString(peakSize * 2 / 1024) + " KB";
 	}
 
-	Json::Value inspectQueuedAsJson() const {
+	Json::Value inspectQueuedAsJson(ev_tstamp evNow, unsigned long long now) const {
 		Json::Value doc(byteSizeAndCountToJson(bytesQueued, nQueued));
 		Json::Value items(Json::arrayValue);
 		Transaction *transaction;
 
 		STAILQ_FOREACH(transaction, &queued, next) {
-			items.append(transaction->inspectStateAsJson());
+			items.append(transaction->inspectStateAsJson(evNow, now));
 		}
 
 		doc["items"] = items;
@@ -1019,14 +1019,10 @@ public:
 		} else {
 			doc["average_key_info_lookup_time"] = durationToJson(avgKeyInfoLookupTime * 10000000);
 		}
-		if (lastErrorTime == 0) {
-			doc["last_error"] = Json::Value(Json::nullValue);
-		} else {
-			doc["last_error"] = evTimeToJson(lastErrorTime, evNow, now);
-			doc["last_error"]["message"] = lastErrorMessage;
-		}
+		doc["last_error"] = errorAndOcurrenceEvTimeToJson(lastErrorMessage,
+			lastErrorTime, evNow, now);
 
-		doc["queued"] = inspectQueuedAsJson();
+		doc["queued"] = inspectQueuedAsJson(evNow, now);
 		doc["segments"] = inspectSegmentsAsJson(evNow, now);
 		doc["servers"] = inspectServersAsJson(evNow, now);
 		doc["keys"] = inspectKeysAsJson(evNow, now);

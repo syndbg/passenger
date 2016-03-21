@@ -654,11 +654,17 @@ public:
 		doc["threshold"] = byteSizeToJson(threshold);
 		doc["compression_level"] = getEffectiveCompressionLevel();
 		doc["accepted"] = byteSizeAndCountToJson(bytesAccepted, nAccepted);
-		doc["queued"] = byteSizeAndCountToJson(bytesQueued, nQueued);
+		doc["queued"] = byteSizeAndCountAndLastActivityEvTimeToJson(bytesQueued, nQueued,
+			lastQueueAddTime, evNow, now);
 		doc["processing"] = byteSizeAndCountToJson(bytesProcessing, nProcessing);
+		doc["processing"]["last_begin_time"] = monoTimeToJson(lastProcessingBeginTime,
+			monoNow, now);
+		doc["processing"]["last_end_time"] = monoTimeToJson(lastProcessingEndTime,
+			monoNow, now);
 		doc["forwarding"] = byteSizeAndCountToJson(bytesForwarding, nForwarding);
 		doc["forwarded"] = byteSizeAndCountToJson(bytesForwarded, nForwarded);
-		doc["dropped"] = byteSizeAndCountToJson(bytesDropped, nDropped);
+		doc["dropped"] = byteSizeAndCountAndLastActivityEvTimeToJson(bytesDropped,
+			nDropped, lastDropTime, evNow, now);
 		doc["segments"] = inspectSegmentsAsJson(evNow, monoNow, now);
 
 		if (quit) {
@@ -670,15 +676,6 @@ public:
 		} else {
 			doc["state"] = "ACTIVE";
 		}
-
-		doc["last_queue_add_time"] = evTimeToJson(lastQueueAddTime,
-			evNow, now);
-		doc["last_processing_begin_time"] = monoTimeToJson(lastProcessingBeginTime,
-			monoNow, now);
-		doc["last_processing_end_time"] = monoTimeToJson(lastProcessingEndTime,
-			monoNow, now);
-		doc["last_drop_time"] = evTimeToJson(lastDropTime,
-			evNow, now);
 
 		return doc;
 	}

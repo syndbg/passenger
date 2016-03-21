@@ -42,6 +42,7 @@
 #include <StaticString.h>
 #include <MemoryKit/palloc.h>
 #include <DataStructures/LString.h>
+#include <Integrations/LibevJsonUtils.h>
 #include <Utils/StrIntUtils.h>
 #include <Utils/JsonUtils.h>
 #include <Utils/FastStringStream.h>
@@ -345,12 +346,12 @@ public:
 		return closedAt != 0;
 	}
 
-	Json::Value inspectStateAsJson() const {
+	Json::Value inspectStateAsJson(ev_tstamp evNow, unsigned long long now) const {
 		Json::Value doc;
 		doc["txn_id"] = getTxnId().toString();
-		doc["created_at"] = timeToJson(createdAt * 1000000.0);
+		doc["created_at"] = evTimeToJson(createdAt, evNow, now);
 		if (closedAt != 0) {
-			doc["closed_at"] = timeToJson(closedAt * 1000000.0);
+			doc["closed_at"] = evTimeToJson(closedAt, evNow, now);
 		}
 		doc["node"] = getNodeName().toString();
 		doc["category"] = getCategory().toString();

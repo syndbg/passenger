@@ -992,9 +992,12 @@ public:
 
 	virtual Json::Value inspectStateAsJson() const {
 		Json::Value doc = ParentClass::inspectStateAsJson();
+		ev_tstamp evNow = ev_now(getLoop());
+		unsigned long long now = SystemTime::getUsec();
+
 		doc["dev_mode"] = devMode;
 		doc["sink"] = sink->inspectStateAsJson();
-		doc["transactions"] = inspectTransactionsStateAsJson();
+		doc["transactions"] = inspectTransactionsStateAsJson(evNow, now);
 		doc["default_node_name"] = defaultNodeName;
 		return doc;
 	}
@@ -1015,13 +1018,13 @@ public:
 		return doc;
 	}
 
-	Json::Value inspectTransactionsStateAsJson() const {
+	Json::Value inspectTransactionsStateAsJson(ev_tstamp evNow, unsigned long long now) const {
 		Json::Value doc(Json::objectValue);
 		TransactionMap::const_iterator it;
 		TransactionMap::const_iterator end = transactions.end();
 		for (it = transactions.begin(); it != end; it++) {
 			Transaction *transaction = it->second;
-			doc[it->first.toString()] = transaction->inspectStateAsJson();
+			doc[it->first.toString()] = transaction->inspectStateAsJson(evNow, now);
 		}
 		return doc;
 	}
