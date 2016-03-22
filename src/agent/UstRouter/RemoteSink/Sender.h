@@ -205,7 +205,7 @@ private:
 		}
 
 		STAILQ_INSERT_TAIL(&transfers, transfer, next);
-		bytesTransferring += batch.getDataSize();
+		bytesTransferring += transfer->batch.getDataSize();
 		nTransfers++;
 		nPeakTransferring = std::max(nPeakTransferring, nTransfers);
 		lastInitiateTime = ev_now(getLoop());
@@ -247,8 +247,8 @@ private:
 		transfer->batch = boost::move(batch);
 		transfer->server = boost::move(server);
 		transfer->state = CONNECTING;
-		transfer->lastActivity = 0;
-		transfer->startTime = 0;
+		transfer->lastActivity = ev_now(getLoop());
+		transfer->startTime = ev_now(getLoop());
 		transfer->uploadBeginTime = 0;
 		transfer->uploadEndTime = 0;
 		transfer->alreadyUploaded = 0;
@@ -645,29 +645,29 @@ private:
 		STAILQ_FOREACH(transfer, &transfers, next) {
 			Json::Value item;
 
-			doc["segment_number"] = transfer->segment->number;
-			doc["server_number"] = transfer->server->getNumber();
-			doc["server_sink_url"] = transfer->server->getSinkUrlWithoutCompression();
-			doc["last_activity"] = evTimeToJson(transfer->lastActivity,
+			item["segment_number"] = transfer->segment->number;
+			item["server_number"] = transfer->server->getNumber();
+			item["server_sink_url"] = transfer->server->getSinkUrlWithoutCompression();
+			item["last_activity"] = evTimeToJson(transfer->lastActivity,
 				evNow, now);
-			doc["start_time"] = evTimeToJson(transfer->startTime, evNow, now);
-			doc["upload_begin_time"] = evTimeToJson(transfer->uploadBeginTime, evNow, now);
-			doc["upload_end_time"] = evTimeToJson(transfer->uploadEndTime, evNow, now);
-			doc["already_uploaded"] = byteSizeToJson(transfer->alreadyUploaded);
-			doc["size"] = byteSizeToJson(transfer->batch.getDataSize());
+			item["start_time"] = evTimeToJson(transfer->startTime, evNow, now);
+			item["upload_begin_time"] = evTimeToJson(transfer->uploadBeginTime, evNow, now);
+			item["upload_end_time"] = evTimeToJson(transfer->uploadEndTime, evNow, now);
+			item["already_uploaded"] = byteSizeToJson(transfer->alreadyUploaded);
+			item["size"] = byteSizeToJson(transfer->batch.getDataSize());
 
 			switch (transfer->state) {
 			case CONNECTING:
-				doc["state"] = "CONNECTING";
+				item["state"] = "CONNECTING";
 				break;
 			case UPLOADING:
-				doc["state"] = "UPLOADING";
+				item["state"] = "UPLOADING";
 				break;
 			case RECEIVING_RESPONSE:
-				doc["state"] = "RECEIVING_RESPONSE";
+				item["state"] = "RECEIVING_RESPONSE";
 				break;
 			default:
-				doc["state"] = "UNKNOWN";
+				item["state"] = "UNKNOWN";
 				break;
 			}
 

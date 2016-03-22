@@ -63,10 +63,19 @@ namespace tut {
 			SystemTime::forceAll(t * 1000000ull);
 		}
 
+		void createServerObject(unsigned int number, unsigned int weight = 1) {
+			ServerPtr server = boost::make_shared<Server>(number,
+				"http://server" + toString(number), weight);
+			segment->servers.push_back(server);
+			for (unsigned int i = 0; i < weight; i++) {
+				segment->balancingList.push_back(server);
+			}
+		}
+
 		void createBatch() {
 			Transaction *txn = new Transaction("", "", "", "key1", 0);
 			txn->append("body");
-			segment->incomingBatches.push_back(Batch(txn));
+			segment->incomingBatches.emplace_back(txn);
 		}
 	};
 
@@ -79,17 +88,27 @@ namespace tut {
 		set_test_name("It sends the given batches to available servers");
 
 		init();
+		createServerObject(1);
+		createServerObject(2);
 		createBatch();
 		createBatch();
 		sender->schedule(segments);
 
 		Json::Value doc = sender->inspectStateAsJson();
-		ensure_equals("(1)", doc["transfers"]["count"].asUInt(), 1u);
+		cout << doc.toStyledString() << endl;
+		ensure_equals("(1)", doc["transfers"]["count"].asUInt(), 2u);
 
 		sender->transferFinished(1, CURLE_OK, 200,
 			"{ \"status\": \"ok\" }", NULL);
 		doc = sender->inspectStateAsJson();
-		ensure_equals("(2)", doc["transfers"]["count"].asUInt(), 0u);
+		ensure_equals("(2)", doc["transfers"]["count"].asUInt(), 1u);
+
+		doc = segment->servers[0]->inspectStateAsJson(ev_now(getLoop()),
+			SystemTime::getUsec());
+		//ensure_equals(doc[""]);
+
+		doc = segment->servers[1]->inspectStateAsJson(ev_now(getLoop()),
+			SystemTime::getUsec());
 	}
 
 
